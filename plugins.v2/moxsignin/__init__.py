@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.0.9"
+    plugin_version = "0.1.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -178,7 +178,7 @@ class MoxSignIn(_PluginBase):
                                 'props': {
                                     'type': 'info',
                                     'variant': 'tonal',
-                                    'text': '支持 cron 定时、保存后执行一次、远程命令 /mox_signin、API /run。固定参数：站点地址 https://mox.moxing.chat，超时 20 秒，时区 Asia/Shanghai。代理地址可自定义，示例：http://192.168.31.216:7890。'
+                                    'text': '🕒 支持 Cron 定时与保存后执行一次\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🌐 固定站点：https://mox.moxing.chat\n⏱️ 固定超时：20 秒｜🧭 固定时区：Asia/Shanghai\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID。'
                                 }
                             }]
                         }]
@@ -209,48 +209,60 @@ class MoxSignIn(_PluginBase):
             return [{'component': 'div', 'text': '暂无数据', 'props': {'class': 'text-center'}}]
 
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
-        page = []
+        username = user_info.get('username', self._username or '未知用户')
+        user_id_value = self._user_id or user_info.get('user_id') or '未获取'
+        member_status = user_info.get('member_status') or {}
+        assets = user_info.get('assets') or {}
 
         member_rows = [
+            {'component': 'tr', 'content': [
+                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': '用户名'},
+                {'component': 'td', 'text': username},
+            ]},
+            {'component': 'tr', 'content': [
+                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': '用户ID'},
+                {'component': 'td', 'text': str(user_id_value)},
+            ]},
+        ] + [
             {'component': 'tr', 'content': [
                 {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
                 {'component': 'td', 'text': v},
             ]}
-            for k, v in (user_info.get('member_status') or {}).items()
-        ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '会员状态'}, {'component': 'td', 'text': user_info.get('member_status_raw', '暂无')}]}]
+            for k, v in member_status.items()
+        ]
+        if len(member_rows) == 2:
+            member_rows.append({'component': 'tr', 'content': [{'component': 'td', 'text': '用户组信息'}, {'component': 'td', 'text': user_info.get('member_status_raw', '暂无')} ]})
+
         asset_rows = [
             {'component': 'tr', 'content': [
                 {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
                 {'component': 'td', 'text': str(v)},
             ]}
-            for k, v in (user_info.get('assets') or {}).items()
+            for k, v in assets.items()
         ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '虚拟资产'}, {'component': 'td', 'text': user_info.get('assets_raw', '暂无')}]}]
 
-        page.append({
-            'component': 'VRow',
+        page = [{
+            'component': 'VCard',
+            'props': {'variant': 'flat', 'class': 'mb-4'},
             'content': [
-                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
-                    'component': 'VCard',
-                    'props': {'variant': 'flat', 'class': 'mb-4'},
-                    'content': [
-                        {'component': 'VCardTitle', 'text': f"👤 用户信息：{user_info.get('username', self._username or '未知用户')}"},
-                        {'component': 'VCardText', 'text': f"资料页：{user_info.get('profile_url', '未获取')}"},
+                {'component': 'VCardTitle', 'text': '👤 用户信息'},
+                {'component': 'VRow', 'content': [
+                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
                         {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
-                    ]
-                }]},
-                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
-                    'component': 'VCard',
-                    'props': {'variant': 'flat', 'class': 'mb-4'},
-                    'content': [
-                        {'component': 'VCardTitle', 'text': '💰 虚拟资产'},
+                    ]},
+                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
                         {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
-                    ]
-                }]},
+                    ]}
+                ]}
             ]
-        })
+        }]
 
         chart_card = self._asset_chart_card(asset_history)
         if chart_card:
+            chart_card['props']['class'] = 'mb-4'
+            chart_card['content'][0]['text'] = '📈 资产趋势图'
+            if chart_card.get('content') and len(chart_card['content']) > 1:
+                chart_card['content'][1]['props']['height'] = 240
             page.append(chart_card)
 
         page.append({
@@ -408,11 +420,6 @@ class MoxSignIn(_PluginBase):
             f"🏁 执行完毕：{'是' if result.get('finished') else '否'}",
             f"📝 结果说明：{result.get('message', '-')}",
         ]
-        steps = result.get('steps') or []
-        if steps:
-            lines.append('━━━━━━━━━━')
-            lines.append('🧭 关键步骤：')
-            lines.extend([f"- {item}" for item in steps[-4:]])
         return "\n".join(lines)
 
     def _save_result(self, result: Dict[str, Any]):
@@ -489,6 +496,33 @@ class MoxSignIn(_PluginBase):
                     pairs[match.group(1).strip()] = match.group(2).strip()
         return pairs
 
+    def _extract_dt_dd_pairs(self, html_text: str, title: str) -> Dict[str, str]:
+        pattern = rf'{title}</h3>(.*?)(?:</div>\s*<div class="bg-white|<!---->|</div>\s*</div>)'
+        match = re.search(pattern, html_text, re.S)
+        if not match:
+            return {}
+        section = match.group(1)
+        pairs = {}
+        for key, value in re.findall(r'<dt[^>]*>(.*?)</dt>\s*<dd[^>]*>(.*?)</dd>', section, re.S):
+            k = re.sub(r'<[^>]+>', '', html.unescape(key)).strip()
+            v = re.sub(r'<[^>]+>', '', html.unescape(value)).strip()
+            if k and v:
+                pairs[k] = v
+        return pairs
+
+    def _extract_asset_cards(self, html_text: str) -> Dict[str, str]:
+        match = re.search(r'虚拟资产</h3>(.*?)(?:</div>\s*<div class="bg-white|<!---->|</div>\s*</div>)', html_text, re.S)
+        if not match:
+            return {}
+        section = match.group(1)
+        assets = {}
+        for value, name in re.findall(r'<dd[^>]*>(.*?)</dd>\s*<dt[^>]*>(.*?)</dt>', section, re.S):
+            n = re.sub(r'<[^>]+>', '', html.unescape(name)).strip()
+            v = re.sub(r'<[^>]+>', '', html.unescape(value)).strip()
+            if n and v:
+                assets[n] = v
+        return assets
+
     def _fetch_profile_sections(self, session: requests.Session, props: Dict[str, Any]) -> Dict[str, Any]:
         user_info = {
             'username': self._username,
@@ -548,31 +582,31 @@ class MoxSignIn(_PluginBase):
         resp = session.get(profile_url, timeout=self._timeout)
         resp.raise_for_status()
         self._log_step(f"已获取用户主页：{profile_url}")
-        text = re.sub(r'<[^>]+>', '\n', resp.text)
+        html_text = resp.text
+        text = re.sub(r'<[^>]+>', '\n', html_text)
         text = html.unescape(text)
         text = re.sub(r'\n+', '\n', text)
+
+        member_pairs = self._extract_dt_dd_pairs(html_text, '会员状态')
+        asset_pairs = self._extract_asset_cards(html_text)
+        account_pairs = self._extract_dt_dd_pairs(html_text, '账户信息')
+
         member_match = re.search(r'会员状态(.*?)(虚拟资产|$)', text, re.S)
-        assets_match = re.search(r'虚拟资产(.*?)(勋章|成就|最近访客|$)', text, re.S)
+        assets_match = re.search(r'虚拟资产(.*?)(账户信息|勋章|成就|最近访客|$)', text, re.S)
         member_raw = member_match.group(1).strip() if member_match else ''
         assets_raw = assets_match.group(1).strip() if assets_match else ''
+
         user_info['member_status_raw'] = member_raw or '暂无'
         user_info['assets_raw'] = assets_raw or '暂无'
-        user_info['member_status'] = self._parse_info_pairs(member_raw)
-        user_info['assets'] = self._parse_info_pairs(assets_raw)
+        user_info['member_status'] = member_pairs or self._parse_info_pairs(member_raw)
+        user_info['assets'] = asset_pairs or self._parse_info_pairs(assets_raw)
 
-        if not user_info['member_status']:
-            for match in re.finditer(r'([\u4e00-\u9fa5A-Za-z0-9_\-]{1,20})[：: ]+([^\n]{1,80})', member_raw):
-                user_info['member_status'][match.group(1).strip()] = match.group(2).strip()
-        if not user_info['assets']:
+        if account_pairs:
+            user_info['member_status'].update({k: v for k, v in account_pairs.items() if k not in user_info['member_status']})
+
+        if not user_info['assets'] and assets_raw:
             for match in re.finditer(r'([\u4e00-\u9fa5A-Za-z0-9_\-]{1,20})[：: ]+([^\n]{1,80})', assets_raw):
                 user_info['assets'][match.group(1).strip()] = match.group(2).strip()
-
-        if (not assets_raw or assets_raw == '暂无') and '虚拟资产' in text:
-            asset_block = re.search(r'虚拟资产(.*?)(个人简介|勋章|成就|最近访客|$)', text, re.S)
-            if asset_block:
-                user_info['assets_raw'] = asset_block.group(1).strip() or '暂无'
-                if not user_info['assets']:
-                    user_info['assets'] = self._parse_info_pairs(user_info['assets_raw'])
 
         if not user_info.get('username') or user_info.get('username') == self._username:
             profile_name = re.search(r'个人主页\s*\n\s*([^\n]+)', text)
