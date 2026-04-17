@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.0.8"
+    plugin_version = "0.0.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -209,45 +209,56 @@ class MoxSignIn(_PluginBase):
             return [{'component': 'div', 'text': '暂无数据', 'props': {'class': 'text-center'}}]
 
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
-        latest = history[0] if history else last_result
+        page = []
 
-        record_rows = []
-        if latest:
-            record_rows.extend([
-                ('最近一次执行时间', latest.get('executed_at', '暂无')),
-                ('最近一次执行结果', latest.get('result_label', '暂无')),
-                ('最近一次中奖信息', latest.get('reward_text', '暂无')),
-                ('今日是否已签到', '是' if latest.get('signed_today') else '否'),
-                ('触发方式', '自动触发' if latest.get('source') == 'cron' else '手动触发'),
-                ('登录状态', latest.get('login_status', '-')),
-                ('签到状态', latest.get('signin_status', '-')),
-                ('完成', '是' if (latest.get('finished') or latest.get('signin_status') == '今日已签到') else '否'),
-                ('最近说明', latest.get('message', '暂无')),
-            ])
+        member_rows = [
+            {'component': 'tr', 'content': [
+                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
+                {'component': 'td', 'text': v},
+            ]}
+            for k, v in (user_info.get('member_status') or {}).items()
+        ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '会员状态'}, {'component': 'td', 'text': user_info.get('member_status_raw', '暂无')}]}]
+        asset_rows = [
+            {'component': 'tr', 'content': [
+                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
+                {'component': 'td', 'text': str(v)},
+            ]}
+            for k, v in (user_info.get('assets') or {}).items()
+        ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '虚拟资产'}, {'component': 'td', 'text': user_info.get('assets_raw', '暂无')}]}]
 
-        page = [{
+        page.append({
+            'component': 'VRow',
+            'content': [
+                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
+                    'component': 'VCard',
+                    'props': {'variant': 'flat', 'class': 'mb-4'},
+                    'content': [
+                        {'component': 'VCardTitle', 'text': f"👤 用户信息：{user_info.get('username', self._username or '未知用户')}"},
+                        {'component': 'VCardText', 'text': f"资料页：{user_info.get('profile_url', '未获取')}"},
+                        {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
+                    ]
+                }]},
+                {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
+                    'component': 'VCard',
+                    'props': {'variant': 'flat', 'class': 'mb-4'},
+                    'content': [
+                        {'component': 'VCardTitle', 'text': '💰 虚拟资产'},
+                        {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
+                    ]
+                }]},
+            ]
+        })
+
+        chart_card = self._asset_chart_card(asset_history)
+        if chart_card:
+            page.append(chart_card)
+
+        page.append({
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-4'},
             'content': [
                 {'component': 'VCardTitle', 'text': '🗂️ 执行记录'},
-                {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [{
-                    'component': 'tbody',
-                    'content': [{
-                        'component': 'tr',
-                        'content': [
-                            {'component': 'td', 'props': {'style': 'width: 220px; font-weight: 600;'}, 'text': label},
-                            {'component': 'td', 'text': value},
-                        ]
-                    } for label, value in record_rows]
-                }]}
-            ]
-        }]
-
-        if history:
-            page[0]['content'].append({
-                'component': 'VTable',
-                'props': {'density': 'compact', 'hover': True, 'class': 'mt-4'},
-                'content': [
+                {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
                     {'component': 'thead', 'content': [{
                         'component': 'tr', 'content': [
                             {'component': 'th', 'text': '时间'},
@@ -268,49 +279,9 @@ class MoxSignIn(_PluginBase):
                             {'component': 'td', 'text': '是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否'},
                         ]
                     } for item in history[:30]]}
-                ]
-            })
-
-        if user_info:
-            member_rows = [
-                {'component': 'tr', 'content': [
-                    {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
-                    {'component': 'td', 'text': v},
                 ]}
-                for k, v in (user_info.get('member_status') or {}).items()
-            ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '会员状态'}, {'component': 'td', 'text': user_info.get('member_status_raw', '暂无')}]}]
-            asset_rows = [
-                {'component': 'tr', 'content': [
-                    {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
-                    {'component': 'td', 'text': str(v)},
-                ]}
-                for k, v in (user_info.get('assets') or {}).items()
-            ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '虚拟资产'}, {'component': 'td', 'text': user_info.get('assets_raw', '暂无')}]}]
-            page.append({
-                'component': 'VRow',
-                'content': [
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'flat', 'class': 'mb-4'},
-                        'content': [
-                            {'component': 'VCardTitle', 'text': f"👤 用户信息：{user_info.get('username', self._username or '未知用户')}"},
-                            {'component': 'VCardText', 'text': f"资料页：{user_info.get('profile_url', '未获取')}"},
-                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
-                        ]
-                    }]},
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{
-                        'component': 'VCard',
-                        'props': {'variant': 'flat', 'class': 'mb-4'},
-                        'content': [
-                            {'component': 'VCardTitle', 'text': '💰 虚拟资产'},
-                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
-                        ]
-                    }]},
-                ]
-            })
-            chart_card = self._asset_chart_card(asset_history)
-            if chart_card:
-                page.append(chart_card)
+            ]
+        })
 
         return page
 
@@ -511,6 +482,11 @@ class MoxSignIn(_PluginBase):
                 i += 2
             else:
                 i += 1
+        if not pairs:
+            for line in lines:
+                match = re.match(r'([^：:]{1,20})[：:](.+)', line)
+                if match:
+                    pairs[match.group(1).strip()] = match.group(2).strip()
         return pairs
 
     def _fetch_profile_sections(self, session: requests.Session, props: Dict[str, Any]) -> Dict[str, Any]:
@@ -583,6 +559,21 @@ class MoxSignIn(_PluginBase):
         user_info['assets_raw'] = assets_raw or '暂无'
         user_info['member_status'] = self._parse_info_pairs(member_raw)
         user_info['assets'] = self._parse_info_pairs(assets_raw)
+
+        if not user_info['member_status']:
+            for match in re.finditer(r'([\u4e00-\u9fa5A-Za-z0-9_\-]{1,20})[：: ]+([^\n]{1,80})', member_raw):
+                user_info['member_status'][match.group(1).strip()] = match.group(2).strip()
+        if not user_info['assets']:
+            for match in re.finditer(r'([\u4e00-\u9fa5A-Za-z0-9_\-]{1,20})[：: ]+([^\n]{1,80})', assets_raw):
+                user_info['assets'][match.group(1).strip()] = match.group(2).strip()
+
+        if (not assets_raw or assets_raw == '暂无') and '虚拟资产' in text:
+            asset_block = re.search(r'虚拟资产(.*?)(个人简介|勋章|成就|最近访客|$)', text, re.S)
+            if asset_block:
+                user_info['assets_raw'] = asset_block.group(1).strip() or '暂无'
+                if not user_info['assets']:
+                    user_info['assets'] = self._parse_info_pairs(user_info['assets_raw'])
+
         if not user_info.get('username') or user_info.get('username') == self._username:
             profile_name = re.search(r'个人主页\s*\n\s*([^\n]+)', text)
             if profile_name:
