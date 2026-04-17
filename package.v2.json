@@ -1,13 +1,14 @@
 {
   "MoxSignIn": {
-    "name": "mox签到自用",
+    "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v1.0.1": "调整插件名称与版本号，继续收敛界面兼容性。",
       "v1.0.0": "自用第一版本发布。",
       "v0.2.1": "优化详情页排版，补充已签到不重复请求提示，整理发布前清理说明。",
       "v0.2.0": "增加手动执行一次、最近执行详情页、每日执行历史、细化错误提示与更完整的通知模板。",

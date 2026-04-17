@@ -12,14 +12,15 @@ from requests import RequestException
 from app.core.event import eventmanager, Event
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import EventType, NotificationType
+from app.schemas import NotificationType
+from app.schemas.types import EventType
 
 
 class MoxSignIn(_PluginBase):
-    plugin_name = "mox签到自用"
+    plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "moxsignin.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com"
     plugin_config_prefix = "moxsignin_"
