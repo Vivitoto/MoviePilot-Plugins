@@ -1,7 +1,7 @@
 {
   "MoxSignIn": {
     "name": "mox签到自用",
-    "description": "自动登录 mox.moxing.chat 执行每日签到抽奖，支持代理、验证码自动获取、中奖信息通知和手动触发。",
+    "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
     "version": "1.0.0",
     "icon": "moxsignin.png",
