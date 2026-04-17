@@ -26,7 +26,7 @@ class MoxSignIn(_PluginBase):
     # 插件图标
     plugin_icon = "moxsignin.png"
     # 插件版本
-    plugin_version = "0.0.1"
+    plugin_version = "0.0.3"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -67,9 +67,9 @@ class MoxSignIn(_PluginBase):
                 self._username = config.get("username") or ""
                 self._password = config.get("password") or ""
                 self._proxy_url = config.get("proxy_url") or "http://192.168.31.216:7890"
-                self._base_url = (config.get("base_url") or "https://mox.moxing.chat").rstrip("/")
-                self._timeout = int(config.get("timeout") or 20)
-                self._timezone = config.get("timezone") or "Asia/Shanghai"
+                self._base_url = "https://mox.moxing.chat"
+                self._timeout = 20
+                self._timezone = "Asia/Shanghai"
                 self._remember = config.get("remember", True)
 
             if self._onlyonce:
@@ -136,72 +136,85 @@ class MoxSignIn(_PluginBase):
         }]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        version = getattr(settings, "VERSION_FLAG", "v1")
+        cron_field_component = "VCronField" if version == "v2" else "VTextField"
+
         return [
             {
                 'component': 'VForm',
                 'content': [
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]
+                                'component': 'VCardItem',
+                                'content': [
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 3},
+                                                'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 3},
+                                                'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 3},
+                                                'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 3},
+                                                'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]
+                                            }
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'cron', 'label': 'Cron', 'placeholder': '10 9 * * *'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '超时秒数'}}]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [{'component': 'VTextField', 'props': {'model': 'timezone', 'label': '时区'}}]
+                                'component': 'VCardItem',
+                                'content': [
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 6},
+                                                'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 6},
+                                                'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 6},
+                                                'content': [{
+                                                    'component': cron_field_component,
+                                                    'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}
+                                                }]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12, 'md': 6},
+                                                'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址', 'placeholder': 'http://192.168.31.216:7890'}}]
+                                            },
+                                        ]
+                                    }
+                                ]
                             }
                         ]
                     },
@@ -217,7 +230,7 @@ class MoxSignIn(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '支持 cron 定时、保存后执行一次、远程命令 /mox_signin、API /run。'
+                                            'text': '支持 cron 定时、保存后执行一次、远程命令 /mox_signin、API /run；若当天已签到，会记录状态但不会重复签到。\n固定参数：站点地址 https://mox.moxing.chat，超时 20 秒，时区 Asia/Shanghai。代理地址可自定义，示例：http://192.168.31.216:7890。'
                                         }
                                     }
                                 ]
@@ -251,35 +264,87 @@ class MoxSignIn(_PluginBase):
                 'props': {'class': 'text-center'}
             }]
 
-        contents = [
+        history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
+        latest = history[0] if history else last_result
+        page = [
+            {
+                'component': 'VRow',
+                'content': [
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12, 'md': 3},
+                        'content': [{
+                            'component': 'VCard',
+                            'props': {'variant': 'tonal'},
+                            'content': [
+                                {'component': 'VCardText', 'text': '最近一次执行时间'},
+                                {'component': 'VCardText', 'text': latest.get('executed_at', '暂无')},
+                            ]
+                        }]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12, 'md': 3},
+                        'content': [{
+                            'component': 'VCard',
+                            'props': {'variant': 'tonal'},
+                            'content': [
+                                {'component': 'VCardText', 'text': '最近一次执行结果'},
+                                {'component': 'VCardText', 'text': latest.get('result_label', '暂无')},
+                            ]
+                        }]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12, 'md': 3},
+                        'content': [{
+                            'component': 'VCard',
+                            'props': {'variant': 'tonal'},
+                            'content': [
+                                {'component': 'VCardText', 'text': '最近一次中奖信息'},
+                                {'component': 'VCardText', 'text': latest.get('reward_text', '暂无')},
+                            ]
+                        }]
+                    },
+                    {
+                        'component': 'VCol',
+                        'props': {'cols': 12, 'md': 3},
+                        'content': [{
+                            'component': 'VCard',
+                            'props': {'variant': 'tonal'},
+                            'content': [
+                                {'component': 'VCardText', 'text': '今日是否已签到'},
+                                {'component': 'VCardText', 'text': '是' if latest.get('signed_today') else '否'},
+                            ]
+                        }]
+                    }
+                ]
+            },
             {
                 'component': 'VCard',
                 'content': [
-                    {'component': 'VCardTitle', 'text': '最近状态'},
-                    {'component': 'VCardText', 'text': f"最近一次执行时间：{last_result.get('executed_at', '暂无')}"},
-                    {'component': 'VCardText', 'text': f"最近一次执行结果：{last_result.get('result_label', '暂无')}"},
-                    {'component': 'VCardText', 'text': f"最近一次中奖信息：{last_result.get('reward_text', '暂无')}"},
-                    {'component': 'VCardText', 'text': f"今日是否已签到：{'是' if last_result.get('signed_today') else '否'}"},
-                    {'component': 'VCardText', 'text': f"最近说明：{last_result.get('message', '暂无')}"},
+                    {'component': 'VCardTitle', 'text': '最近状态说明'},
+                    {'component': 'VCardText', 'text': f"触发来源：{latest.get('source', '-') }"},
+                    {'component': 'VCardText', 'text': f"登录状态：{latest.get('login_status', '-') }"},
+                    {'component': 'VCardText', 'text': f"签到状态：{latest.get('signin_status', '-') }"},
+                    {'component': 'VCardText', 'text': f"站点：{self._base_url}"},
+                    {'component': 'VCardText', 'text': f"最近说明：{latest.get('message', '暂无')}"},
                 ]
             }
         ]
 
         if history:
-            history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True)
-            for item in history[:10]:
-                contents.append({
-                    'component': 'VCard',
-                    'content': [
-                        {'component': 'VCardText', 'text': f"时间：{item.get('executed_at', '-')}"},
-                        {'component': 'VCardText', 'text': f"来源：{item.get('source', '-')}"},
-                        {'component': 'VCardText', 'text': f"登录：{item.get('login_status', '-')}"},
-                        {'component': 'VCardText', 'text': f"签到：{item.get('signin_status', '-')}"},
-                        {'component': 'VCardText', 'text': f"奖励：{item.get('reward_text', '-')}"},
-                        {'component': 'VCardText', 'text': f"结果：{item.get('message', '-')}"},
-                    ]
-                })
-        return contents
+            page.append({
+                'component': 'VCard',
+                'content': [{'component': 'VCardTitle', 'text': '最近执行记录（近10次）'}] + [
+                    {
+                        'component': 'VCardText',
+                        'text': f"{item.get('executed_at', '-')} | {item.get('source', '-')} | 登录:{item.get('login_status', '-')} | 签到:{item.get('signin_status', '-')} | 奖励:{item.get('reward_text', '-')} | 结果:{item.get('message', '-')}"
+                    }
+                    for item in history[:10]
+                ]
+            })
+        return page
 
     def api_run(self):
         return self.run_once(source="api")
