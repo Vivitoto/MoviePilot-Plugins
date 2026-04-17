@@ -116,55 +116,38 @@ class MoxSignIn(_PluginBase):
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
             {
-                "component": "VForm",
-                "content": [
+                'component': 'VForm',
+                'content': [
                     {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [{"component": "VSwitch", "props": {"model": "notify", "label": "发送通知"}}]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [{"component": "VSwitch", "props": {"model": "remember", "label": "保持登录偏好"}}]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [{"component": "VSwitch", "props": {"model": "onlyonce", "label": "保存后手动执行一次"}}]
-                            }
+                        'component': 'VRow',
+                        'content': [
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
                         ]
                     },
                     {
-                        "component": "VRow",
-                        "content": [
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "username", "label": "用户名"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "password", "label": "密码", "type": "password", "placeholder": "仅保存在插件配置中，不写入仓库"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VCronField", "props": {"model": "cron", "label": "执行周期", "placeholder": "5位cron表达式"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "proxy_url", "label": "代理地址"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "base_url", "label": "站点地址"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "timeout", "label": "超时秒数"}}]},
-                            {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "timezone", "label": "默认时区"}}]}
+                        'component': 'VRow',
+                        'content': [
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'cron', 'label': 'Cron', 'placeholder': '10 9 * * *'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '超时秒数'}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'timezone', 'label': '时区'}}]},
                         ]
                     },
                     {
-                        "component": "VRow",
-                        "content": [
+                        'component': 'VRow',
+                        'content': [
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "text": "支持两种手动触发：1）保存配置时打开“保存后手动执行一次”；2）通过远程命令 /mox_signin。插件会自动获取验证码、处理签到，并在需要时自动设置时区。"}},
-                                    {"component": "VAlert", "props": {"type": "success", "variant": "tonal", "text": "如果当天已经签到过，插件会识别已签到状态，不再重复请求签到接口，只记录结果并更新详情页。"}},
-                                    {"component": "VAlert", "props": {"type": "warning", "variant": "tonal", "text": "站点前端存在时区选择弹窗和签到介绍弹窗。前者会在缺失时区时被自动处理；后者仅是前端展示，不影响接口自动签到。"}}
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {'component': 'div', 'text': '说明：支持定时执行、保存后执行一次、远程命令 /mox_signin、API /run。'},
+                                    {'component': 'div', 'text': '说明：若当天已签到，会记录结果但不重复请求签到接口。'},
                                 ]
                             }
                         ]
@@ -172,116 +155,60 @@ class MoxSignIn(_PluginBase):
                 ]
             }
         ], {
-            "enabled": False,
-            "notify": True,
-            "onlyonce": False,
-            "cron": "10 9 * * *",
-            "username": "",
-            "password": "",
-            "proxy_url": "http://192.168.31.216:7890",
-            "base_url": "https://mox.moxing.chat",
-            "timeout": 20,
-            "timezone": "Asia/Shanghai",
-            "remember": True,
+            'enabled': False,
+            'notify': True,
+            'onlyonce': False,
+            'cron': '10 9 * * *',
+            'username': '',
+            'password': '',
+            'proxy_url': 'http://192.168.31.216:7890',
+            'base_url': 'https://mox.moxing.chat',
+            'timeout': 20,
+            'timezone': 'Asia/Shanghai',
+            'remember': True,
         }
 
     def get_page(self) -> List[dict]:
         last = self.get_data(self._last_result_key) or {}
         history = self._history()
-        recent = sorted(history.values(), key=lambda x: x.get("executed_at", ""), reverse=True)[:20]
+        recent = sorted(history.values(), key=lambda x: x.get('executed_at', ''), reverse=True)[:10]
 
-        if not last and not recent:
-            return [{
+        contents = []
+        contents.append({
+            'component': 'VCard',
+            'content': [
+                {'component': 'VCardTitle', 'text': '最近状态'},
+                {'component': 'VCardText', 'text': f"最近一次执行时间：{last.get('executed_at') or '暂无'}"},
+                {'component': 'VCardText', 'text': f"最近一次执行结果：{last.get('result_label') or '暂无'}"},
+                {'component': 'VCardText', 'text': f"最近一次中奖信息：{last.get('reward_text') or '暂无'}"},
+                {'component': 'VCardText', 'text': f"今日是否已签到：{'是' if (last.get('day') == self._today_key() and last.get('signed_today')) else '否'}"},
+                {'component': 'VCardText', 'text': f"站点：{self._base_url}"},
+                {'component': 'VCardText', 'text': f"代理：{last.get('proxy') or '未配置'}"},
+                {'component': 'VCardText', 'text': f"最近说明：{last.get('message') or '暂无'}"},
+            ]
+        })
+
+        if recent:
+            history_text = []
+            for item in recent:
+                history_text.append(
+                    f"{item.get('day') or '-'} | {item.get('executed_at') or '-'} | {item.get('source') or '-'} | 登录:{item.get('login_status') or '-'} | 签到:{item.get('signin_status') or '-'} | 奖励:{item.get('reward_text') or '-'} | 结果:{item.get('result_label') or '-'}"
+                )
+            contents.append({
+                'component': 'VCard',
+                'content': [
+                    {'component': 'VCardTitle', 'text': '最近执行记录'},
+                    {'component': 'VCardText', 'text': '\n'.join(history_text)}
+                ]
+            })
+        else:
+            contents.append({
                 'component': 'div',
                 'text': '暂无执行记录',
                 'props': {'class': 'text-center'}
-            }]
+            })
 
-        items = [
-            {
-                'time': item.get('executed_at', '-'),
-                'day': item.get('day', '-'),
-                'source': item.get('source', '-'),
-                'login': item.get('login_status', '-'),
-                'signin': item.get('signin_status', '-'),
-                'reward': item.get('reward_text', '-'),
-                'result': item.get('result_label', '-'),
-            }
-            for item in recent
-        ]
-
-        return [
-            {
-                'component': 'VRow',
-                'content': [
-                    self._stat_card('最近一次执行时间', last.get('executed_at', '暂无')),
-                    self._stat_card('最近一次执行结果', last.get('result_label', '暂无')),
-                    self._stat_card('最近一次中奖信息', last.get('reward_text', '暂无')),
-                    self._stat_card('今日是否已签到', '是' if (last.get('day') == self._today_key() and last.get('signed_today')) else '否'),
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12},
-                        'content': [{
-                            'component': 'VCard',
-                            'props': {'variant': 'tonal'},
-                            'content': [{
-                                'component': 'VCardText',
-                                'content': [
-                                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-1'}, 'text': '当前状态'},
-                                    {'component': 'div', 'props': {'class': 'text-caption'}, 'text': f"站点：{self._base_url}"},
-                                    {'component': 'div', 'props': {'class': 'text-caption'}, 'text': f"代理：{last.get('proxy') or '未配置'}"},
-                                    {'component': 'div', 'props': {'class': 'text-caption'}, 'text': f"最近说明：{last.get('message') or '暂无'}"},
-                                ]
-                            }]
-                        }]
-                    },
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12},
-                        'content': [{
-                            'component': 'VDataTableVirtual',
-                            'props': {
-                                'class': 'text-sm',
-                                'headers': [
-                                    {'title': '日期', 'key': 'day', 'sortable': True},
-                                    {'title': '执行时间', 'key': 'time', 'sortable': True},
-                                    {'title': '触发来源', 'key': 'source', 'sortable': False},
-                                    {'title': '登录', 'key': 'login', 'sortable': False},
-                                    {'title': '签到', 'key': 'signin', 'sortable': False},
-                                    {'title': '奖励', 'key': 'reward', 'sortable': False},
-                                    {'title': '结果', 'key': 'result', 'sortable': False},
-                                ],
-                                'items': items,
-                                'height': '28rem',
-                                'density': 'compact',
-                                'fixed-header': True,
-                                'hide-no-data': True,
-                                'hover': True,
-                            },
-                        }]
-                    }
-                ]
-            }
-        ]
-
-    @staticmethod
-    def _stat_card(title: str, value: str) -> Dict[str, Any]:
-        return {
-            'component': 'VCol',
-            'props': {'cols': 6, 'md': 3},
-            'content': [{
-                'component': 'VCard',
-                'props': {'variant': 'tonal'},
-                'content': [{
-                    'component': 'VCardText',
-                    'props': {'class': 'text-center pa-2'},
-                    'content': [
-                        {'component': 'div', 'props': {'class': 'text-caption'}, 'text': title},
-                        {'component': 'div', 'props': {'class': 'text-subtitle-1'}, 'text': value},
-                    ],
-                }],
-            }],
-        }
+        return contents
 
     def api_run(self):
         return self.run_once(source="api")
