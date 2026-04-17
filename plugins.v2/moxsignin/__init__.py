@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.1.1"
+    plugin_version = "0.1.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -182,7 +182,7 @@ class MoxSignIn(_PluginBase):
                                 'props': {
                                     'type': 'info',
                                     'variant': 'tonal',
-                                    'text': '🕒 支持 Cron 定时与保存后执行一次\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🌐 固定站点：https://mox.moxing.chat\n⏱️ 固定超时：20 秒｜🧭 固定时区：Asia/Shanghai\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID\n🔄 可单独选择执行签到时是否刷新用户信息与资产。'
+                                    'text': '🌐 固定站点：https://mox.moxing.chat ｜ ⏱️ 固定超时：20 秒 ｜ 🧭 固定时区：Asia/Shanghai\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID\n🔄 可单独选择执行签到时是否刷新用户信息与资产'
                                 }
                             }]
                         }]
@@ -221,16 +221,16 @@ class MoxSignIn(_PluginBase):
 
         member_rows = [
             {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': '用户名'},
+                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': '用户名'},
                 {'component': 'td', 'text': username},
             ]},
             {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': '用户ID'},
+                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': '用户ID'},
                 {'component': 'td', 'text': str(user_id_value)},
             ]},
         ] + [
             {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
+                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': k},
                 {'component': 'td', 'text': v},
             ]}
             for k, v in member_status.items()
@@ -240,7 +240,7 @@ class MoxSignIn(_PluginBase):
 
         asset_rows = [
             {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 180px; font-weight: 600;'}, 'text': k},
+                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': k},
                 {'component': 'td', 'text': str(v)},
             ]}
             for k, v in assets.items()
@@ -248,52 +248,56 @@ class MoxSignIn(_PluginBase):
 
         page = [{
             'component': 'VCard',
-            'props': {'variant': 'flat', 'class': 'mb-4'},
+            'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
                 {'component': 'VCardTitle', 'text': '👤 用户信息'},
-                {'component': 'VRow', 'content': [
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                        {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
-                    ]},
-                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                        {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
-                    ]}
-                ]}
+                {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [{
+                    'component': 'VRow',
+                    'props': {'dense': True},
+                    'content': [
+                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
+                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
+                        ]},
+                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
+                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
+                        ]}
+                    ]
+                }]}
             ]
         }]
 
         chart_card = self._asset_chart_card(asset_history)
         if chart_card:
-            chart_card['props']['class'] = 'mb-4'
+            chart_card['props']['class'] = 'mb-3'
             chart_card['content'][0]['text'] = '📈 资产趋势图'
             if chart_card.get('content') and len(chart_card['content']) > 1:
-                chart_card['content'][1]['props']['height'] = 240
+                chart_card['content'][1]['props']['height'] = 220
             page.append(chart_card)
 
         page.append({
             'component': 'VCard',
-            'props': {'variant': 'flat', 'class': 'mb-4'},
+            'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
                 {'component': 'VCardTitle', 'text': '🗂️ 执行记录'},
                 {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
                     {'component': 'thead', 'content': [{
                         'component': 'tr', 'content': [
-                            {'component': 'th', 'text': '时间'},
-                            {'component': 'th', 'text': '触发方式'},
-                            {'component': 'th', 'text': '登录'},
-                            {'component': 'th', 'text': '签到'},
-                            {'component': 'th', 'text': '奖励'},
-                            {'component': 'th', 'text': '完成'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 26%;'}, 'text': '时间'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 14%;'}, 'text': '触发方式'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 12%;'}, 'text': '登录'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 16%;'}, 'text': '签到'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 20%;'}, 'text': '奖励'},
+                            {'component': 'th', 'props': {'style': 'text-align:center; width: 12%;'}, 'text': '完成'},
                         ]
                     }]},
                     {'component': 'tbody', 'content': [{
                         'component': 'tr', 'content': [
-                            {'component': 'td', 'text': item.get('executed_at', '-')},
-                            {'component': 'td', 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
-                            {'component': 'td', 'text': item.get('login_status', '-')},
-                            {'component': 'td', 'text': item.get('signin_status', '-')},
-                            {'component': 'td', 'text': item.get('reward_text', '-')},
-                            {'component': 'td', 'text': '是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否'},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('executed_at', '-')},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('login_status', '-')},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('signin_status', '-')},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('reward_text', '-')},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': '是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否'},
                         ]
                     } for item in history[:30]]}
                 ]}
@@ -633,7 +637,7 @@ class MoxSignIn(_PluginBase):
         }
         if not uid:
             return user_info
-        resp = session.post(f"{self._base_url}/api/forum/users/profile/data", json={'uid': int(uid)}, timeout=self._timeout)
+        resp = session.post(f"{self._base_url}/api/forum/user-profile-data", json={'uid': int(uid)}, timeout=self._timeout)
         resp.raise_for_status()
         data = resp.json() or {}
         payload = (data.get('data') or {}) if isinstance(data, dict) else {}
