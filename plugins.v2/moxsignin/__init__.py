@@ -48,6 +48,28 @@ class MoxSignIn(_PluginBase):
     _last_result_key = "last_result"
     _user_info_key = "user_info"
     _asset_history_key = "asset_history"
+    _group_name_map = {
+        1: "魔域创造者 (管理员)",
+        2: "魔域守护者 (超级版主)",
+        3: "魔域长老 (版主)",
+        10: "外院新生",
+        11: "内院新生",
+        12: "魔者（一）",
+        13: "魔师（二）",
+        14: "魔灵（三）",
+        15: "魔王（四）",
+        21: "魔皇（五）",
+        22: "魔宗（六）",
+        23: "魔尊（七）",
+        24: "魔圣（八）",
+        25: "魔帝（九）",
+        26: "一年VIP（异火附体）",
+        27: "永久VIP（炎帝）",
+        31: "净莲妖火（异火）",
+        34: "三年VIP（焚决大成）",
+        35: "半年VIP（焚决残卷）",
+        36: "虚无吞炎（异火）",
+    }
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -181,9 +203,15 @@ class MoxSignIn(_PluginBase):
                                 'component': 'VAlert',
                                 'props': {
                                     'type': 'info',
-                                    'variant': 'tonal',
-                                    'text': '🌐 固定站点：https://mox.moxing.chat ｜ ⏱️ 固定超时：20 秒 ｜ 🧭 固定时区：Asia/Shanghai\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID\n🔄 可单独选择执行签到时是否刷新用户信息与资产'
-                                }
+                                    'variant': 'tonal'
+                                },
+                                'content': [
+                                    {'component': 'div', 'text': '🌐 固定站点：https://mox.moxing.chat ｜ ⏱️ 固定超时：20 秒 ｜ 🧭 固定时区：Asia/Shanghai'},
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🛰️ 支持远程命令 /mox_signin 与 API /run'},
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔌 代理地址可自定义，示例：http://192.168.31.216:7890'},
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '👤 如自动识别用户资料失败，可手动填写用户ID'},
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔄 可单独选择执行签到时是否刷新用户信息与资产'}
+                                ]
                             }]
                         }]
                     }
@@ -216,53 +244,57 @@ class MoxSignIn(_PluginBase):
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
         username = user_info.get('username', self._username or '未知用户')
         user_id_value = self._user_id or user_info.get('user_id') or '未获取'
-        member_status = user_info.get('member_status') or {}
+        member_status = dict(user_info.get('member_status') or {})
         assets = user_info.get('assets') or {}
 
-        member_rows = [
-            {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': '用户名'},
-                {'component': 'td', 'text': username},
-            ]},
-            {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': '用户ID'},
-                {'component': 'td', 'text': str(user_id_value)},
-            ]},
-        ] + [
-            {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': k},
-                {'component': 'td', 'text': v},
-            ]}
-            for k, v in member_status.items()
-        ]
-        if len(member_rows) == 2:
-            member_rows.append({'component': 'tr', 'content': [{'component': 'td', 'text': '用户组信息'}, {'component': 'td', 'text': user_info.get('member_status_raw', '暂无')} ]})
+        group_name = member_status.get('用户组') or user_info.get('member_status_raw', '暂无')
+        level_name = member_status.get('积分等级') or '暂无'
+        register_at = member_status.get('注册时间', '-')
+        last_login = member_status.get('上次登录', '-')
+        credits = member_status.get('积分', '-')
 
-        asset_rows = [
-            {'component': 'tr', 'content': [
-                {'component': 'td', 'props': {'style': 'width: 140px; font-weight: 600;'}, 'text': k},
-                {'component': 'td', 'text': str(v)},
-            ]}
-            for k, v in assets.items()
-        ] or [{'component': 'tr', 'content': [{'component': 'td', 'text': '虚拟资产'}, {'component': 'td', 'text': user_info.get('assets_raw', '暂无')}]}]
+        user_cards = [
+            ('👤 用户名', username),
+            ('🆔 用户ID', str(user_id_value)),
+            ('🏷️ 用户组', group_name),
+            ('📅 注册时间', register_at),
+            ('🕘 上次登录', last_login),
+        ]
+        asset_cards = [
+            ('⭐ 积分', str(credits)),
+            ('🎖️ 积分等级', level_name),
+            ('🪙 软妹币', str(assets.get('软妹币', '-'))),
+            ('💵 交易魔币', str(assets.get('交易魔币', '-'))),
+            ('💰 绑定魔币', str(assets.get('绑定魔币', '-'))),
+        ]
+
+        def _info_card(title: str, value: str, color: str) -> Dict[str, Any]:
+            return {
+                'component': 'VCol',
+                'props': {'cols': 12, 'sm': 6, 'md': 4},
+                'content': [{
+                    'component': 'VCard',
+                    'props': {'variant': 'tonal', 'color': color, 'class': 'h-100'},
+                    'content': [
+                        {'component': 'VCardText', 'content': [
+                            {'component': 'div', 'props': {'class': 'text-caption mb-1'}, 'text': title},
+                            {'component': 'div', 'props': {'class': 'text-body-1 font-weight-bold'}, 'text': value or '-'}
+                        ]}
+                    ]
+                }]
+            }
 
         page = [{
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
                 {'component': 'VCardTitle', 'text': '👤 用户信息'},
-                {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [{
-                    'component': 'VRow',
-                    'props': {'dense': True},
-                    'content': [
-                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': member_rows}]}
-                        ]},
-                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                            {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{'component': 'tbody', 'content': asset_rows}]}
-                        ]}
-                    ]
-                }]}
+                {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [
+                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2'}, 'text': '基础资料'},
+                    {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-2'}, 'content': [_info_card(t, v, 'primary') for t, v in user_cards]},
+                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2 mt-1'}, 'text': '积分与资产'},
+                    {'component': 'VRow', 'props': {'dense': True}, 'content': [_info_card(t, v, 'warning') for t, v in asset_cards]},
+                ]}
             ]
         }]
 
@@ -447,6 +479,13 @@ class MoxSignIn(_PluginBase):
             return float(value)
         m = re.search(r'-?\d+(?:\.\d+)?', str(value).replace(',', ''))
         return float(m.group(0)) if m else 0.0
+
+    def _group_name(self, group_id: Any) -> str:
+        try:
+            gid = int(group_id)
+        except Exception:
+            return str(group_id or '-')
+        return self._group_name_map.get(gid, str(gid))
 
     def _save_asset_point(self, user_info: Dict[str, Any]):
         assets = user_info.get('assets') or {}
@@ -645,11 +684,13 @@ class MoxSignIn(_PluginBase):
             return user_info
         user_info['username'] = payload.get('name') or self._username
         user_info['user_id'] = str(payload.get('id') or uid)
+        group_id = payload.get('group_id')
+        level_group_id = payload.get('level_group_id')
         user_info['member_status'] = {
-            '用户组': str(payload.get('group_id') or '-'),
+            '用户组': self._group_name(group_id),
             '用户组到期': str(payload.get('group_expiry') or 'N/A'),
             '积分': str(payload.get('credits') or '0'),
-            '积分等级': str(payload.get('level_group_id') or '-'),
+            '积分等级': self._group_name(level_group_id),
         }
         user_info['assets'] = {
             '软妹币': str(payload.get('rmb') or '0'),
