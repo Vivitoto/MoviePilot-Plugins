@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.0.6"
+    plugin_version = "0.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -207,23 +207,25 @@ class MoxSignIn(_PluginBase):
         latest = history[0] if history else last_result
         steps = latest.get('steps') or []
 
-        summary_rows = [
-            ('🕒 最近一次执行时间', latest.get('executed_at', '暂无')),
-            ('✅ 最近一次执行结果', latest.get('result_label', '暂无')),
-            ('🎁 最近一次中奖信息', latest.get('reward_text', '暂无')),
-            ('📅 今日是否已签到', '是' if latest.get('signed_today') else '否'),
-            ('🚦 触发方式', '自动触发' if latest.get('source') == 'cron' else '手动触发'),
-            ('🔐 登录状态', latest.get('login_status', '-')),
-            ('✍️ 签到状态', latest.get('signin_status', '-')),
-            ('🏁 是否执行完毕', '是' if latest.get('finished') else '否'),
-            ('📝 最近说明', latest.get('message', '暂无')),
-        ]
+        record_rows = []
+        if latest:
+            record_rows.extend([
+                ('最近一次执行时间', latest.get('executed_at', '暂无')),
+                ('最近一次执行结果', latest.get('result_label', '暂无')),
+                ('最近一次中奖信息', latest.get('reward_text', '暂无')),
+                ('今日是否已签到', '是' if latest.get('signed_today') else '否'),
+                ('触发方式', '自动触发' if latest.get('source') == 'cron' else '手动触发'),
+                ('登录状态', latest.get('login_status', '-')),
+                ('签到状态', latest.get('signin_status', '-')),
+                ('完成', '是' if (latest.get('finished') or latest.get('signin_status') == '今日已签到') else '否'),
+                ('最近说明', latest.get('message', '暂无')),
+            ])
 
         page = [{
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-4'},
             'content': [
-                {'component': 'VCardTitle', 'text': '📊 执行概览'},
+                {'component': 'VCardTitle', 'text': '🗂️ 执行记录'},
                 {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [{
                     'component': 'tbody',
                     'content': [{
@@ -232,10 +234,38 @@ class MoxSignIn(_PluginBase):
                             {'component': 'td', 'props': {'style': 'width: 220px; font-weight: 600;'}, 'text': label},
                             {'component': 'td', 'text': value},
                         ]
-                    } for label, value in summary_rows]
+                    } for label, value in record_rows]
                 }]}
             ]
         }]
+
+        if history:
+            page[0]['content'].append({
+                'component': 'VTable',
+                'props': {'density': 'compact', 'hover': True, 'class': 'mt-4'},
+                'content': [
+                    {'component': 'thead', 'content': [{
+                        'component': 'tr', 'content': [
+                            {'component': 'th', 'text': '时间'},
+                            {'component': 'th', 'text': '触发方式'},
+                            {'component': 'th', 'text': '登录'},
+                            {'component': 'th', 'text': '签到'},
+                            {'component': 'th', 'text': '奖励'},
+                            {'component': 'th', 'text': '完成'},
+                        ]
+                    }]},
+                    {'component': 'tbody', 'content': [{
+                        'component': 'tr', 'content': [
+                            {'component': 'td', 'text': item.get('executed_at', '-')},
+                            {'component': 'td', 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
+                            {'component': 'td', 'text': item.get('login_status', '-')},
+                            {'component': 'td', 'text': item.get('signin_status', '-')},
+                            {'component': 'td', 'text': item.get('reward_text', '-')},
+                            {'component': 'td', 'text': '是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否'},
+                        ]
+                    } for item in history[:30]]}
+                ]
+            })
 
         if user_info:
             member_rows = [
@@ -294,37 +324,6 @@ class MoxSignIn(_PluginBase):
                             ]
                         } for idx, item in enumerate(steps)]
                     }]}
-                ]
-            })
-
-        if history:
-            page.append({
-                'component': 'VCard',
-                'props': {'variant': 'flat'},
-                'content': [
-                    {'component': 'VCardTitle', 'text': '🗂️ 最近执行记录（近10次）'},
-                    {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
-                        {'component': 'thead', 'content': [{
-                            'component': 'tr', 'content': [
-                                {'component': 'th', 'text': '时间'},
-                                {'component': 'th', 'text': '触发方式'},
-                                {'component': 'th', 'text': '登录'},
-                                {'component': 'th', 'text': '签到'},
-                                {'component': 'th', 'text': '奖励'},
-                                {'component': 'th', 'text': '完成'},
-                            ]
-                        }]},
-                        {'component': 'tbody', 'content': [{
-                            'component': 'tr', 'content': [
-                                {'component': 'td', 'text': item.get('executed_at', '-')},
-                                {'component': 'td', 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
-                                {'component': 'td', 'text': item.get('login_status', '-')},
-                                {'component': 'td', 'text': item.get('signin_status', '-')},
-                                {'component': 'td', 'text': item.get('reward_text', '-')},
-                                {'component': 'td', 'text': '是' if item.get('finished') else '否'},
-                            ]
-                        } for item in history[:10]]}
-                    ]}
                 ]
             })
         return page
@@ -493,15 +492,20 @@ class MoxSignIn(_PluginBase):
             {'keyword': username},
             {'q': username},
             {'keyword': username, 'type': 'user'},
+            {'query': username},
         ]
         for params in candidates:
             try:
                 resp = session.get(f"{self._base_url}/forum/search", params=params, timeout=self._timeout)
                 if resp.status_code != 200:
                     continue
-                m = re.search(r'/forum/profile/(\d+)', resp.text)
-                if m:
-                    return m.group(1)
+                match = re.search(r'/forum/profile/(\d+)', resp.text)
+                if match:
+                    return match.group(1)
+                decoded = html.unescape(resp.text)
+                match = re.search(r'"url":"\\?/forum/profile/(\d+)"', decoded)
+                if match:
+                    return match.group(1)
             except Exception:
                 continue
         return None
@@ -533,11 +537,43 @@ class MoxSignIn(_PluginBase):
         user_id = auth_user.get('id')
         if auth_user.get('name'):
             user_info['username'] = auth_user.get('name')
-        if not user_id:
+
+        profile_url = ''
+        if user_id:
+            profile_url = f"{self._base_url}/forum/profile/{user_id}"
+
+        if not profile_url:
+            candidate_urls = []
+            for key in ['profile_url', 'profileUrl', 'url', 'link']:
+                value = auth_user.get(key)
+                if isinstance(value, str) and '/forum/profile/' in value:
+                    candidate_urls.append(value)
+            for value in props.values() if isinstance(props, dict) else []:
+                if isinstance(value, str) and '/forum/profile/' in value:
+                    candidate_urls.append(value)
+            if candidate_urls:
+                raw_url = candidate_urls[0]
+                profile_url = raw_url if raw_url.startswith('http') else f"{self._base_url}{raw_url}"
+                match = re.search(r'/forum/profile/(\d+)', profile_url)
+                if match:
+                    user_id = match.group(1)
+
+        if not profile_url and self._username:
             user_id = self._search_user_id(session, self._username)
-        if not user_id:
+            if user_id:
+                profile_url = f"{self._base_url}/forum/profile/{user_id}"
+
+        if not profile_url:
+            home_resp = session.get(f"{self._base_url}/forum/sign", timeout=self._timeout)
+            home_resp.raise_for_status()
+            match = re.search(r'/forum/profile/(\d+)', home_resp.text)
+            if match:
+                user_id = match.group(1)
+                profile_url = f"{self._base_url}/forum/profile/{user_id}"
+
+        if not profile_url:
             return user_info
-        profile_url = f"{self._base_url}/forum/profile/{user_id}"
+
         user_info['profile_url'] = profile_url
         resp = session.get(profile_url, timeout=self._timeout)
         resp.raise_for_status()
@@ -552,6 +588,10 @@ class MoxSignIn(_PluginBase):
         user_info['assets_raw'] = assets_raw or '暂无'
         user_info['member_status'] = self._parse_info_pairs(member_raw)
         user_info['assets'] = self._parse_info_pairs(assets_raw)
+        if not user_info.get('username') or user_info.get('username') == self._username:
+            profile_name = re.search(r'个人主页\s*\n\s*([^\n]+)', text)
+            if profile_name:
+                user_info['username'] = profile_name.group(1).strip()
         return user_info
 
     def _asset_chart_card(self, asset_history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
