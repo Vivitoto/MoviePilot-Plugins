@@ -3,11 +3,12 @@
     "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v0.1.1": "改为优先走资料接口刷新用户信息，并新增可选的刷新开关。",
       "v0.1.0": "按资料页 dt/dd 与资产卡片结构重做用户信息和资产解析。",
       "v0.0.9": "将用户信息置顶，执行记录仅保留表格，并继续补强资料解析。",
       "v0.0.8": "支持手填用户ID兜底，并将关键步骤改为输出到插件日志。",

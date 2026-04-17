@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.1.0"
+    plugin_version = "0.1.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -41,6 +41,7 @@ class MoxSignIn(_PluginBase):
     _timezone = "Asia/Shanghai"
     _remember = True
     _user_id = ""
+    _refresh_user_info = True
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -61,6 +62,7 @@ class MoxSignIn(_PluginBase):
                 self._proxy_url = config.get("proxy_url") or "http://192.168.31.216:7890"
                 self._remember = config.get("remember", True)
                 self._user_id = str(config.get("user_id") or "").strip()
+                self._refresh_user_info = config.get("refresh_user_info", True)
 
             if self._onlyonce:
                 logger.info("Mox签到自用：保存配置后执行一次")
@@ -95,6 +97,7 @@ class MoxSignIn(_PluginBase):
             "timezone": self._timezone,
             "remember": self._remember,
             "user_id": self._user_id,
+            "refresh_user_info": self._refresh_user_info,
         })
 
     @staticmethod
@@ -145,6 +148,7 @@ class MoxSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
                                 ]
                             }]
                         }]
@@ -178,7 +182,7 @@ class MoxSignIn(_PluginBase):
                                 'props': {
                                     'type': 'info',
                                     'variant': 'tonal',
-                                    'text': '🕒 支持 Cron 定时与保存后执行一次\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🌐 固定站点：https://mox.moxing.chat\n⏱️ 固定超时：20 秒｜🧭 固定时区：Asia/Shanghai\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID。'
+                                    'text': '🕒 支持 Cron 定时与保存后执行一次\n🛰️ 支持远程命令 /mox_signin 与 API /run\n🌐 固定站点：https://mox.moxing.chat\n⏱️ 固定超时：20 秒｜🧭 固定时区：Asia/Shanghai\n🔌 代理地址可自定义，示例：http://192.168.31.216:7890\n👤 如自动识别用户资料失败，可手动填写用户ID\n🔄 可单独选择执行签到时是否刷新用户信息与资产。'
                                 }
                             }]
                         }]
@@ -198,6 +202,7 @@ class MoxSignIn(_PluginBase):
             "timezone": "Asia/Shanghai",
             "remember": True,
             "user_id": "",
+            "refresh_user_info": True,
         }
 
     def get_page(self) -> List[dict]:
@@ -526,6 +531,7 @@ class MoxSignIn(_PluginBase):
     def _fetch_profile_sections(self, session: requests.Session, props: Dict[str, Any]) -> Dict[str, Any]:
         user_info = {
             'username': self._username,
+            'user_id': self._user_id or '',
             'profile_url': '',
             'member_status': {},
             'member_status_raw': '',
@@ -579,6 +585,7 @@ class MoxSignIn(_PluginBase):
             return user_info
 
         user_info['profile_url'] = profile_url
+        user_info['user_id'] = str(user_id or self._user_id or '')
         resp = session.get(profile_url, timeout=self._timeout)
         resp.raise_for_status()
         self._log_step(f"已获取用户主页：{profile_url}")
@@ -613,6 +620,78 @@ class MoxSignIn(_PluginBase):
             if profile_name:
                 user_info['username'] = profile_name.group(1).strip()
         return user_info
+
+    def _fetch_profile_via_api(self, session: requests.Session, uid: str) -> Dict[str, Any]:
+        user_info = {
+            'username': self._username,
+            'user_id': uid,
+            'profile_url': f"{self._base_url}/forum/profile/{uid}" if uid else '',
+            'member_status': {},
+            'member_status_raw': '',
+            'assets': {},
+            'assets_raw': '',
+        }
+        if not uid:
+            return user_info
+        resp = session.post(f"{self._base_url}/api/forum/users/profile/data", json={'uid': int(uid)}, timeout=self._timeout)
+        resp.raise_for_status()
+        data = resp.json() or {}
+        payload = (data.get('data') or {}) if isinstance(data, dict) else {}
+        if not payload:
+            return user_info
+        user_info['username'] = payload.get('name') or self._username
+        user_info['user_id'] = str(payload.get('id') or uid)
+        user_info['member_status'] = {
+            '用户组': str(payload.get('group_id') or '-'),
+            '用户组到期': str(payload.get('group_expiry') or 'N/A'),
+            '积分': str(payload.get('credits') or '0'),
+            '积分等级': str(payload.get('level_group_id') or '-'),
+        }
+        user_info['assets'] = {
+            '软妹币': str(payload.get('rmb') or '0'),
+            '交易魔币': str(payload.get('mobi') or '0'),
+            '绑定魔币': str(payload.get('free') or '0'),
+        }
+        user_info['member_status_raw'] = '；'.join([f"{k}：{v}" for k, v in user_info['member_status'].items()])
+        user_info['assets_raw'] = '；'.join([f"{k}：{v}" for k, v in user_info['assets'].items()])
+        if payload.get('register_at'):
+            user_info['member_status']['注册时间'] = str(payload.get('register_at'))
+        if payload.get('last_login'):
+            user_info['member_status']['上次登录'] = str(payload.get('last_login'))
+        return user_info
+
+    def _refresh_user_snapshot(self, session: requests.Session, props: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not self._refresh_user_info:
+            self._log_step('已跳过用户信息刷新（配置关闭）')
+            return None
+        uid = self._user_id or str(((props.get('auth') or {}).get('user') or {}).get('id') or '')
+        if not uid and self._username:
+            uid = self._search_user_id(session, self._username) or ''
+        user_info = {}
+        last_error = None
+        if uid:
+            try:
+                user_info = self._fetch_profile_via_api(session, uid)
+                if user_info.get('assets') or user_info.get('member_status'):
+                    self._log_step(f'已通过资料接口刷新用户信息：{uid}')
+                    self.save_data(self._user_info_key, user_info)
+                    self._save_asset_point(user_info)
+                    return user_info
+            except Exception as e:
+                last_error = e
+                self._log_step(f'资料接口刷新失败，改走页面解析：{e}')
+        try:
+            user_info = self._fetch_profile_sections(session, props)
+            if user_info:
+                self.save_data(self._user_info_key, user_info)
+                self._save_asset_point(user_info)
+                self._log_step('已通过页面解析刷新用户信息与资产数据')
+                return user_info
+        except Exception as e:
+            last_error = e
+        if last_error:
+            raise last_error
+        return None
 
     def _asset_chart_card(self, asset_history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not asset_history:
@@ -696,12 +775,9 @@ class MoxSignIn(_PluginBase):
                 self._log_step('检测到今天已经签到过')
                 result.update({'signin_status': '今日已签到', 'signed_today': True, 'result_label': '已签到', 'message': '今天已经签到过了，本次不会重复请求签到接口', 'finished': True})
                 try:
-                    user_info = self._fetch_profile_sections(session, props)
+                    user_info = self._refresh_user_snapshot(session, props)
                     if user_info:
-                        self.save_data(self._user_info_key, user_info)
-                        self._save_asset_point(user_info)
                         steps.append('👤 已刷新用户信息与资产数据')
-                        self._log_step('已刷新用户信息与资产数据')
                 except Exception as info_error:
                     steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
                 self._save_result(result)
@@ -735,10 +811,8 @@ class MoxSignIn(_PluginBase):
                 message = f"{message}；抽奖结果：{reward_text}"
             result.update({'signin_status': '成功', 'signed_today': True, 'reward_text': reward_text or '未解析到奖励详情', 'result_label': '成功', 'message': message, 'finished': True})
             try:
-                user_info = self._fetch_profile_sections(session, props)
+                user_info = self._refresh_user_snapshot(session, props)
                 if user_info:
-                    self.save_data(self._user_info_key, user_info)
-                    self._save_asset_point(user_info)
                     steps.append('👤 已刷新用户信息与资产数据')
             except Exception as info_error:
                 steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
