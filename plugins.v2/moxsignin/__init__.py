@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.1.3"
+    plugin_version = "1.0.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -260,23 +260,28 @@ class MoxSignIn(_PluginBase):
             ('📅 注册时间', register_at),
             ('🕘 上次登录', last_login),
         ]
-        asset_cards = [
+        level_cards = [
             ('⭐ 积分', str(credits)),
             ('🎖️ 积分等级', level_name),
+        ]
+        currency_cards = [
             ('🪙 软妹币', str(assets.get('软妹币', '-'))),
             ('💵 交易魔币', str(assets.get('交易魔币', '-'))),
             ('💰 绑定魔币', str(assets.get('绑定魔币', '-'))),
         ]
 
-        def _info_card(title: str, value: str, color: str) -> Dict[str, Any]:
+        def _info_card(title: str, value: str, color: str, cols: Dict[str, int] = None) -> Dict[str, Any]:
+            props = {'cols': 12, 'sm': 6, 'md': 4}
+            if cols:
+                props.update(cols)
             return {
                 'component': 'VCol',
-                'props': {'cols': 12, 'sm': 6, 'md': 4},
+                'props': props,
                 'content': [{
                     'component': 'VCard',
                     'props': {'variant': 'tonal', 'color': color, 'class': 'h-100'},
                     'content': [
-                        {'component': 'VCardText', 'content': [
+                        {'component': 'VCardText', 'props': {'class': 'py-3 px-4'}, 'content': [
                             {'component': 'div', 'props': {'class': 'text-caption mb-1'}, 'text': title},
                             {'component': 'div', 'props': {'class': 'text-body-1 font-weight-bold'}, 'text': value or '-'}
                         ]}
@@ -289,11 +294,18 @@ class MoxSignIn(_PluginBase):
             'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
                 {'component': 'VCardTitle', 'text': '👤 用户信息'},
-                {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [
+                {'component': 'VCardText', 'props': {'class': 'pt-2 pb-2'}, 'content': [
                     {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2'}, 'text': '基础资料'},
-                    {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-2'}, 'content': [_info_card(t, v, 'primary') for t, v in user_cards]},
-                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2 mt-1'}, 'text': '积分与资产'},
-                    {'component': 'VRow', 'props': {'dense': True}, 'content': [_info_card(t, v, 'warning') for t, v in asset_cards]},
+                    {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-1'}, 'content': [
+                        _info_card(t, v, 'primary', {'md': 4, 'sm': 6}) for t, v in user_cards
+                    ]},
+                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2 mt-2'}, 'text': '积分与资产'},
+                    {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-1'}, 'content': [
+                        _info_card(t, v, 'secondary', {'md': 6, 'sm': 6}) for t, v in level_cards
+                    ]},
+                    {'component': 'VRow', 'props': {'dense': True}, 'content': [
+                        _info_card(t, v, 'warning', {'md': 4, 'sm': 4}) for t, v in currency_cards
+                    ]},
                 ]}
             ]
         }]
