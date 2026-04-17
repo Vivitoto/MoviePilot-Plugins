@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.1.2"
+    plugin_version = "0.1.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -449,6 +449,7 @@ class MoxSignIn(_PluginBase):
 
     def _notify_text(self, result: Dict[str, Any]) -> str:
         trigger = '自动触发' if result.get('source') == 'cron' else '手动触发'
+        refresh_status = result.get('refresh_status', '未刷新')
         lines = [
             '✨ Mox 签到结果',
             '━━━━━━━━━━',
@@ -458,7 +459,7 @@ class MoxSignIn(_PluginBase):
             f"✍️ 签到状态：{result.get('signin_status', '-')}",
             f"🔢 验证码：{result.get('captcha_result', '-')}",
             f"🎁 奖励结果：{result.get('reward_text', '无')}",
-            f"🏁 执行完毕：{'是' if result.get('finished') else '否'}",
+            f"👤 刷新资料：{refresh_status}",
             f"📝 结果说明：{result.get('message', '-')}",
         ]
         return "\n".join(lines)
@@ -787,6 +788,7 @@ class MoxSignIn(_PluginBase):
             'finished': False,
             'captcha_result': '未获取',
             'proxy_used': self._proxy_url or '未配置',
+            'refresh_status': '未刷新' if not self._refresh_user_info else '待刷新',
             'steps': steps,
         }
         if not self._username or not self._password:
@@ -822,8 +824,12 @@ class MoxSignIn(_PluginBase):
                 try:
                     user_info = self._refresh_user_snapshot(session, props)
                     if user_info:
+                        result['refresh_status'] = '成功'
                         steps.append('👤 已刷新用户信息与资产数据')
+                    elif not self._refresh_user_info:
+                        result['refresh_status'] = '未刷新'
                 except Exception as info_error:
+                    result['refresh_status'] = '失败'
                     steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
                 self._save_result(result)
                 if self._notify:
@@ -858,8 +864,12 @@ class MoxSignIn(_PluginBase):
             try:
                 user_info = self._refresh_user_snapshot(session, props)
                 if user_info:
+                    result['refresh_status'] = '成功'
                     steps.append('👤 已刷新用户信息与资产数据')
+                elif not self._refresh_user_info:
+                    result['refresh_status'] = '未刷新'
             except Exception as info_error:
+                result['refresh_status'] = '失败'
                 steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
             steps.append('✅ 执行完成')
             self._log_step('执行完成')
