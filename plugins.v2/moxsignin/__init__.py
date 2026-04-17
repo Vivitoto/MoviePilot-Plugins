@@ -24,9 +24,9 @@ class MoxSignIn(_PluginBase):
     # 插件描述
     plugin_desc = "自动登录魔性论坛签到。"
     # 插件图标
-    plugin_icon = "moxsignin.png"
+    plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
     # 插件版本
-    plugin_version = "0.0.3"
+    plugin_version = "0.0.5"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -54,6 +54,7 @@ class MoxSignIn(_PluginBase):
     _history_key = "history"
     _last_result_key = "last_result"
     _current_trigger_type = "手动触发"
+    _icon_url = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -191,6 +192,13 @@ class MoxSignIn(_PluginBase):
                                         'content': [
                                             {
                                                 'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-3'}, 'text': '账号配置'}
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
                                                 'props': {'cols': 12, 'md': 6},
                                                 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]
                                             },
@@ -198,6 +206,13 @@ class MoxSignIn(_PluginBase):
                                                 'component': 'VCol',
                                                 'props': {'cols': 12, 'md': 6},
                                                 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}
+                                                ]
                                             },
                                             {
                                                 'component': 'VCol',
@@ -266,82 +281,120 @@ class MoxSignIn(_PluginBase):
 
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
         latest = history[0] if history else last_result
-        page = [
-            {
-                'component': 'VRow',
+        steps = latest.get('steps') or []
+
+        summary_rows = [
+            ('🕒 最近一次执行时间', latest.get('executed_at', '暂无')),
+            ('✅ 最近一次执行结果', latest.get('result_label', '暂无')),
+            ('🎁 最近一次中奖信息', latest.get('reward_text', '暂无')),
+            ('📅 今日是否已签到', '是' if latest.get('signed_today') else '否'),
+            ('🚦 触发方式', '自动触发' if latest.get('source') == 'cron' else '手动触发'),
+            ('🔐 登录状态', latest.get('login_status', '-')),
+            ('✍️ 签到状态', latest.get('signin_status', '-')),
+            ('🌐 代理地址', latest.get('proxy_used') or self._proxy_url or '未配置'),
+            ('📍 站点地址', self._base_url),
+            ('🏁 是否执行完毕', '是' if latest.get('finished') else '否'),
+            ('📝 最近说明', latest.get('message', '暂无')),
+        ]
+
+        page = [{
+            'component': 'VCard',
+            'props': {'variant': 'flat', 'class': 'mb-4'},
+            'content': [
+                {'component': 'VCardTitle', 'text': '📊 执行概览'},
+                {
+                    'component': 'VTable',
+                    'props': {'density': 'compact', 'hover': True},
+                    'content': [
+                        {
+                            'component': 'tbody',
+                            'content': [
+                                {
+                                    'component': 'tr',
+                                    'content': [
+                                        {'component': 'td', 'props': {'style': 'width: 220px; font-weight: 600;'}, 'text': label},
+                                        {'component': 'td', 'text': value},
+                                    ]
+                                }
+                                for label, value in summary_rows
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }]
+
+        if steps:
+            page.append({
+                'component': 'VCard',
+                'props': {'variant': 'flat', 'class': 'mb-4'},
                 'content': [
+                    {'component': 'VCardTitle', 'text': '🧭 本次关键步骤'},
                     {
-                        'component': 'VCol',
-                        'props': {'cols': 12, 'md': 3},
-                        'content': [{
-                            'component': 'VCard',
-                            'props': {'variant': 'tonal'},
-                            'content': [
-                                {'component': 'VCardText', 'text': '最近一次执行时间'},
-                                {'component': 'VCardText', 'text': latest.get('executed_at', '暂无')},
-                            ]
-                        }]
-                    },
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12, 'md': 3},
-                        'content': [{
-                            'component': 'VCard',
-                            'props': {'variant': 'tonal'},
-                            'content': [
-                                {'component': 'VCardText', 'text': '最近一次执行结果'},
-                                {'component': 'VCardText', 'text': latest.get('result_label', '暂无')},
-                            ]
-                        }]
-                    },
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12, 'md': 3},
-                        'content': [{
-                            'component': 'VCard',
-                            'props': {'variant': 'tonal'},
-                            'content': [
-                                {'component': 'VCardText', 'text': '最近一次中奖信息'},
-                                {'component': 'VCardText', 'text': latest.get('reward_text', '暂无')},
-                            ]
-                        }]
-                    },
-                    {
-                        'component': 'VCol',
-                        'props': {'cols': 12, 'md': 3},
-                        'content': [{
-                            'component': 'VCard',
-                            'props': {'variant': 'tonal'},
-                            'content': [
-                                {'component': 'VCardText', 'text': '今日是否已签到'},
-                                {'component': 'VCardText', 'text': '是' if latest.get('signed_today') else '否'},
-                            ]
-                        }]
+                        'component': 'VTable',
+                        'props': {'density': 'compact'},
+                        'content': [
+                            {
+                                'component': 'tbody',
+                                'content': [
+                                    {
+                                        'component': 'tr',
+                                        'content': [
+                                            {'component': 'td', 'props': {'style': 'width: 60px; font-weight: 600;'}, 'text': str(idx + 1)},
+                                            {'component': 'td', 'text': item},
+                                        ]
+                                    }
+                                    for idx, item in enumerate(steps)
+                                ]
+                            }
+                        ]
                     }
                 ]
-            },
-            {
-                'component': 'VCard',
-                'content': [
-                    {'component': 'VCardTitle', 'text': '最近状态说明'},
-                    {'component': 'VCardText', 'text': f"触发来源：{latest.get('source', '-') }"},
-                    {'component': 'VCardText', 'text': f"登录状态：{latest.get('login_status', '-') }"},
-                    {'component': 'VCardText', 'text': f"签到状态：{latest.get('signin_status', '-') }"},
-                    {'component': 'VCardText', 'text': f"站点：{self._base_url}"},
-                    {'component': 'VCardText', 'text': f"最近说明：{latest.get('message', '暂无')}"},
-                ]
-            }
-        ]
+            })
 
         if history:
             page.append({
                 'component': 'VCard',
-                'content': [{'component': 'VCardTitle', 'text': '最近执行记录（近10次）'}] + [
+                'props': {'variant': 'flat'},
+                'content': [
+                    {'component': 'VCardTitle', 'text': '🗂️ 最近执行记录（近10次）'},
                     {
-                        'component': 'VCardText',
-                        'text': f"{item.get('executed_at', '-')} | {item.get('source', '-')} | 登录:{item.get('login_status', '-')} | 签到:{item.get('signin_status', '-')} | 奖励:{item.get('reward_text', '-')} | 结果:{item.get('message', '-')}"
+                        'component': 'VTable',
+                        'props': {'density': 'compact', 'hover': True},
+                        'content': [
+                            {
+                                'component': 'thead',
+                                'content': [{
+                                    'component': 'tr',
+                                    'content': [
+                                        {'component': 'th', 'text': '时间'},
+                                        {'component': 'th', 'text': '触发方式'},
+                                        {'component': 'th', 'text': '登录'},
+                                        {'component': 'th', 'text': '签到'},
+                                        {'component': 'th', 'text': '奖励'},
+                                        {'component': 'th', 'text': '完成'},
+                                    ]
+                                }]
+                            },
+                            {
+                                'component': 'tbody',
+                                'content': [
+                                    {
+                                        'component': 'tr',
+                                        'content': [
+                                            {'component': 'td', 'text': item.get('executed_at', '-')},
+                                            {'component': 'td', 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
+                                            {'component': 'td', 'text': item.get('login_status', '-')},
+                                            {'component': 'td', 'text': item.get('signin_status', '-')},
+                                            {'component': 'td', 'text': item.get('reward_text', '-')},
+                                            {'component': 'td', 'text': '是' if item.get('finished') else '否'},
+                                        ]
+                                    }
+                                    for item in history[:10]
+                                ]
+                            }
+                        ]
                     }
-                    for item in history[:10]
                 ]
             })
         return page
@@ -479,7 +532,9 @@ class MoxSignIn(_PluginBase):
             f"触发方式：{result.get('source', '-')}",
             f"登录：{result.get('login_status', '-')}",
             f"签到：{result.get('signin_status', '-')}",
+            f"验证码：{result.get('captcha_result', '-')}",
             f"抽中奖励：{result.get('reward_text', '无')}",
+            f"执行完毕：{'是' if result.get('finished') else '否'}",
             f"结果：{result.get('message', '-')}",
         ]
         return "\n".join(lines)
@@ -498,6 +553,7 @@ class MoxSignIn(_PluginBase):
 
     def run_once(self, source: str = "manual"):
         self._current_trigger_type = "定时触发" if source == "cron" else "手动触发"
+        steps: List[str] = []
         result = {
             "executed_at": self._now_text(),
             "source": source,
@@ -507,14 +563,20 @@ class MoxSignIn(_PluginBase):
             "signed_today": False,
             "result_label": "执行中",
             "message": "",
+            "finished": False,
+            "captcha_result": "未获取",
+            "proxy_used": self._proxy_url or "未配置",
+            "steps": steps,
         }
 
         if not self._username or not self._password:
+            steps.append("❌ 未配置账号密码，终止执行")
             result.update({
                 "login_status": "失败",
                 "signin_status": "未执行",
                 "result_label": "失败",
                 "message": "未配置账号密码",
+                "finished": True,
             })
             self._save_result(result)
             if self._notify:
@@ -522,22 +584,29 @@ class MoxSignIn(_PluginBase):
             return result
 
         try:
+            steps.append("🚀 开始执行签到流程")
             session = self._session()
+            steps.append(f"🌐 已创建会话，代理：{self._proxy_url or '未配置'}")
             self._login(session)
             result["login_status"] = "成功"
+            steps.append("🔐 登录成功")
 
             props = self._load_sign_page(session)
+            steps.append("📄 已打开签到页")
             timezone_note = self._ensure_timezone(session, props)
             if timezone_note:
                 props = self._load_sign_page(session)
                 result["message"] = timezone_note
+                steps.append(f"🌍 {timezone_note}")
 
             if props.get("is_checked_in"):
+                steps.append("ℹ️ 检测到今天已经签到过")
                 result.update({
                     "signin_status": "今日已签到",
                     "signed_today": True,
                     "result_label": "已签到",
                     "message": "今天已经签到过了，本次不会重复请求签到接口",
+                    "finished": True,
                 })
                 self._save_result(result)
                 if self._notify:
@@ -545,11 +614,15 @@ class MoxSignIn(_PluginBase):
                 return result
 
             payload = self._captcha(session)
+            result["captcha_result"] = f"识别成功：{payload.get('captcha', '')}"
+            steps.append(f"🔢 验证码识别成功：{payload.get('captcha', '')}")
             try:
                 resp = session.post(f"{self._base_url}/api/forum/check-in/sign", json=payload, timeout=self._timeout)
                 resp.raise_for_status()
                 data = resp.json()
+                steps.append("📝 已提交签到请求")
             except RequestException as e:
+                steps.append(f"❌ 签到请求失败：{e}")
                 raise RuntimeError(f"签到请求失败：{e}") from e
 
             reward_index = (((data or {}).get("data") or {}).get("data"))
@@ -557,6 +630,9 @@ class MoxSignIn(_PluginBase):
             reward_text = None
             if reward:
                 reward_text = reward.get("text") or reward.get("name")
+                steps.append(f"🎁 获得奖励：{reward_text}")
+            else:
+                steps.append("🎁 未解析到明确奖励信息")
             message = (((data or {}).get("data") or {}).get("message")) or data.get("message") or "签到完成"
             if reward_text and reward_text not in message:
                 message = f"{message}；抽奖结果：{reward_text}"
@@ -567,19 +643,24 @@ class MoxSignIn(_PluginBase):
                 "reward_text": reward_text or "未解析到奖励详情",
                 "result_label": "成功",
                 "message": message,
+                "finished": True,
             })
+            steps.append("✅ 执行完成")
             self._save_result(result)
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
             return result
         except Exception as e:
+            steps.append(f"💥 执行失败：{str(e)}")
             result.update({
                 "result_label": "失败",
                 "message": str(e),
+                "finished": True,
             })
             if result["login_status"] == "未开始":
                 result["login_status"] = "失败"
                 result["signin_status"] = "未执行"
+                steps.append("🔐 登录未完成")
             else:
                 result["signin_status"] = "失败"
             self._save_result(result)
