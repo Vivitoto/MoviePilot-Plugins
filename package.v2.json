@@ -4,7 +4,7 @@
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
     "version": "1.0.0",
-    "icon": "moxsignin.png",
+    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
