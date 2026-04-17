@@ -19,7 +19,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "魔性签到抽奖"
     plugin_desc = "自动登录 mox.moxing.chat 执行每日签到抽奖并返回中奖信息。"
     plugin_icon = "Lucky_A.png"
-    plugin_version = "0.2.0"
+    plugin_version = "0.2.1"
     plugin_author = "OpenClaw Assistant"
     author_url = "https://github.com"
     plugin_config_prefix = "moxsignin_"
@@ -163,6 +163,7 @@ class MoxSignIn(_PluginBase):
                                 "props": {"cols": 12},
                                 "content": [
                                     {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "text": "支持两种手动触发：1）保存配置时打开“保存后手动执行一次”；2）通过远程命令 /mox_signin。插件会自动获取验证码、处理签到，并在需要时自动设置时区。"}},
+                                    {"component": "VAlert", "props": {"type": "success", "variant": "tonal", "text": "如果当天已经签到过，插件会识别已签到状态，不再重复请求签到接口，只记录结果并更新详情页。"}},
                                     {"component": "VAlert", "props": {"type": "warning", "variant": "tonal", "text": "站点前端存在时区选择弹窗和签到介绍弹窗。前者会在缺失时区时被自动处理；后者仅是前端展示，不影响接口自动签到。"}}
                                 ]
                             }
@@ -218,15 +219,51 @@ class MoxSignIn(_PluginBase):
                 "content": [
                     {
                         "component": "VCol",
+                        "props": {"cols": 12, "md": 7},
+                        "content": [
+                            {
+                                "component": "VCard",
+                                "content": [
+                                    {"component": "VCardTitle", "text": "当前状态"},
+                                    {"component": "VCardText", "text": f"站点：{self._base_url}"},
+                                    {"component": "VCardText", "text": f"代理：{last.get('proxy') or '未配置'}"},
+                                    {"component": "VCardText", "text": f"最近说明：{last.get('message') or '暂无'}"},
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 5},
+                        "content": [
+                            {
+                                "component": "VCard",
+                                "content": [
+                                    {"component": "VCardTitle", "text": "执行策略提示"},
+                                    {"component": "VCardText", "text": "• 每天可按 cron 自动执行"},
+                                    {"component": "VCardText", "text": "• 支持保存配置后立即执行一次"},
+                                    {"component": "VCardText", "text": "• 如果当天已签到，插件不会重复请求签到接口"},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "component": "VRow",
+                "content": [
+                    {
+                        "component": "VCol",
                         "props": {"cols": 12},
                         "content": [
                             {
                                 "component": "VCard",
                                 "content": [
                                     {"component": "VCardTitle", "text": "最近每日执行情况"},
+                                    {"component": "VCardText", "text": "保留近 30 天记录，便于查看每日是否执行、是否登录成功、是否签到成功以及抽中的奖励。"},
                                     {
                                         "component": "VTable",
-                                        "props": {"hover": True},
+                                        "props": {"hover": True, "density": "compact"},
                                         "content": [
                                             {
                                                 "component": "thead",
@@ -494,7 +531,7 @@ class MoxSignIn(_PluginBase):
                     "signin_status": "今日已签到",
                     "signed_today": True,
                     "result_label": "已签到",
-                    "message": "今天已经签到过了",
+                    "message": "今天已经签到过了，本次不会重复请求签到接口",
                 })
                 self._save_history_item(result)
                 logger.info("魔性签到抽奖：今天已经签到过了")
