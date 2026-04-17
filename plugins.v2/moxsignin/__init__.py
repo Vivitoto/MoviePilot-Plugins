@@ -22,7 +22,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "0.0.7"
+    plugin_version = "0.0.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -40,6 +40,7 @@ class MoxSignIn(_PluginBase):
     _timeout = 20
     _timezone = "Asia/Shanghai"
     _remember = True
+    _user_id = ""
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -59,6 +60,7 @@ class MoxSignIn(_PluginBase):
                 self._password = config.get("password") or ""
                 self._proxy_url = config.get("proxy_url") or "http://192.168.31.216:7890"
                 self._remember = config.get("remember", True)
+                self._user_id = str(config.get("user_id") or "").strip()
 
             if self._onlyonce:
                 logger.info("Mox签到自用：保存配置后执行一次")
@@ -92,6 +94,7 @@ class MoxSignIn(_PluginBase):
             "timeout": self._timeout,
             "timezone": self._timezone,
             "remember": self._remember,
+            "user_id": self._user_id,
         })
 
     @staticmethod
@@ -155,8 +158,9 @@ class MoxSignIn(_PluginBase):
                                 'component': 'VRow',
                                 'content': [
                                     {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mb-3'}, 'text': '账号配置'}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'user_id', 'label': '用户ID（可选）', 'placeholder': '如 458775'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址', 'placeholder': 'http://192.168.31.216:7890'}}]},
@@ -193,6 +197,7 @@ class MoxSignIn(_PluginBase):
             "timeout": 20,
             "timezone": "Asia/Shanghai",
             "remember": True,
+            "user_id": "",
         }
 
     def get_page(self) -> List[dict]:
@@ -205,7 +210,6 @@ class MoxSignIn(_PluginBase):
 
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
         latest = history[0] if history else last_result
-        steps = latest.get('steps') or []
 
         record_rows = []
         if latest:
@@ -308,24 +312,6 @@ class MoxSignIn(_PluginBase):
             if chart_card:
                 page.append(chart_card)
 
-        if steps:
-            page.append({
-                'component': 'VCard',
-                'props': {'variant': 'flat', 'class': 'mb-4'},
-                'content': [
-                    {'component': 'VCardTitle', 'text': '🧭 本次关键步骤'},
-                    {'component': 'VTable', 'props': {'density': 'compact'}, 'content': [{
-                        'component': 'tbody',
-                        'content': [{
-                            'component': 'tr',
-                            'content': [
-                                {'component': 'td', 'props': {'style': 'width: 60px; font-weight: 600;'}, 'text': str(idx + 1)},
-                                {'component': 'td', 'text': item},
-                            ]
-                        } for idx, item in enumerate(steps)]
-                    }]}
-                ]
-            })
         return page
 
     def api_run(self):
@@ -434,6 +420,9 @@ class MoxSignIn(_PluginBase):
             return None
         return rewards[idx] if 0 <= idx < len(rewards) else None
 
+    def _log_step(self, message: str):
+        logger.info(f"{self.plugin_name}：{message}")
+
     def _notify_text(self, result: Dict[str, Any]) -> str:
         trigger = '自动触发' if result.get('source') == 'cron' else '手动触发'
         lines = [
@@ -535,6 +524,8 @@ class MoxSignIn(_PluginBase):
         }
         auth_user = (props.get('auth') or {}).get('user') or {}
         user_id = auth_user.get('id')
+        if self._user_id:
+            user_id = self._user_id
         if auth_user.get('name'):
             user_info['username'] = auth_user.get('name')
 
@@ -563,6 +554,9 @@ class MoxSignIn(_PluginBase):
             if user_id:
                 profile_url = f"{self._base_url}/forum/profile/{user_id}"
 
+        if not profile_url and self._user_id:
+            profile_url = f"{self._base_url}/forum/profile/{self._user_id}"
+
         if not profile_url:
             home_resp = session.get(f"{self._base_url}/forum/sign", timeout=self._timeout)
             home_resp.raise_for_status()
@@ -577,6 +571,7 @@ class MoxSignIn(_PluginBase):
         user_info['profile_url'] = profile_url
         resp = session.get(profile_url, timeout=self._timeout)
         resp.raise_for_status()
+        self._log_step(f"已获取用户主页：{profile_url}")
         text = re.sub(r'<[^>]+>', '\n', resp.text)
         text = html.unescape(text)
         text = re.sub(r'\n+', '\n', text)
@@ -630,6 +625,7 @@ class MoxSignIn(_PluginBase):
 
     def run_once(self, source: str = "manual"):
         steps: List[str] = []
+        trigger_text = "自动触发" if source == "cron" else "手动触发"
         result = {
             'executed_at': self._now_text(),
             'source': source,
@@ -653,20 +649,26 @@ class MoxSignIn(_PluginBase):
             return result
         try:
             steps.append('🚀 开始执行签到流程')
+            self._log_step(f"开始执行签到流程（{trigger_text}）")
             session = self._session()
             steps.append(f"🌐 已创建会话，代理：{self._proxy_url or '未配置'}")
+            self._log_step(f"已创建会话，代理：{self._proxy_url or '未配置'}")
             self._login(session)
             result['login_status'] = '成功'
             steps.append('🔐 登录成功')
+            self._log_step('登录成功')
             _, props = self._load_sign_page(session)
             steps.append('📄 已打开签到页')
+            self._log_step('已打开签到页')
             timezone_note = self._ensure_timezone(session, props)
             if timezone_note:
                 _, props = self._load_sign_page(session)
                 result['message'] = timezone_note
                 steps.append(f"🌍 {timezone_note}")
+                self._log_step(timezone_note)
             if props.get('is_checked_in'):
                 steps.append('ℹ️ 检测到今天已经签到过')
+                self._log_step('检测到今天已经签到过')
                 result.update({'signin_status': '今日已签到', 'signed_today': True, 'result_label': '已签到', 'message': '今天已经签到过了，本次不会重复请求签到接口', 'finished': True})
                 try:
                     user_info = self._fetch_profile_sections(session, props)
@@ -674,6 +676,7 @@ class MoxSignIn(_PluginBase):
                         self.save_data(self._user_info_key, user_info)
                         self._save_asset_point(user_info)
                         steps.append('👤 已刷新用户信息与资产数据')
+                        self._log_step('已刷新用户信息与资产数据')
                 except Exception as info_error:
                     steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
                 self._save_result(result)
@@ -683,11 +686,13 @@ class MoxSignIn(_PluginBase):
             payload = self._captcha(session)
             result['captcha_result'] = f"识别成功：{payload.get('captcha', '')}"
             steps.append(f"🔢 验证码识别成功：{payload.get('captcha', '')}")
+            self._log_step(f"验证码识别成功：{payload.get('captcha', '')}")
             try:
                 resp = session.post(f"{self._base_url}/api/forum/check-in/sign", json=payload, timeout=self._timeout)
                 resp.raise_for_status()
                 data = resp.json()
                 steps.append('📝 已提交签到请求')
+                self._log_step('已提交签到请求')
             except RequestException as e:
                 steps.append(f"❌ 签到请求失败：{e}")
                 raise RuntimeError(f"签到请求失败：{e}") from e
@@ -696,8 +701,10 @@ class MoxSignIn(_PluginBase):
             reward_text = reward.get('text') or reward.get('name') if reward else None
             if reward_text:
                 steps.append(f"🎁 获得奖励：{reward_text}")
+                self._log_step(f"获得奖励：{reward_text}")
             else:
                 steps.append('🎁 未解析到明确奖励信息')
+                self._log_step('未解析到明确奖励信息')
             message = (((data or {}).get('data') or {}).get('message')) or data.get('message') or '签到完成'
             if reward_text and reward_text not in message:
                 message = f"{message}；抽奖结果：{reward_text}"
@@ -711,12 +718,14 @@ class MoxSignIn(_PluginBase):
             except Exception as info_error:
                 steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
             steps.append('✅ 执行完成')
+            self._log_step('执行完成')
             self._save_result(result)
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
             return result
         except Exception as e:
             steps.append(f"💥 执行失败：{str(e)}")
+            self._log_step(f"执行失败：{str(e)}")
             result.update({'result_label': '失败', 'message': str(e), 'finished': True})
             if result['login_status'] == '未开始':
                 result['login_status'] = '失败'
