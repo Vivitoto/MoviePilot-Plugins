@@ -14,6 +14,7 @@
 
 - `plugins.v2/moxsignin/__init__.py`
 - `package.v2.json`
+- `icons/moxsignin.png`
 
 ## 配置说明
 

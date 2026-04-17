@@ -18,7 +18,7 @@ from app.schemas.types import EventType, NotificationType
 class MoxSignIn(_PluginBase):
     plugin_name = "mox签到自用"
     plugin_desc = "自动登录 mox.moxing.chat 执行每日签到抽奖并返回中奖信息。"
-    plugin_icon = "Lucky_A.png"
+    plugin_icon = "moxsignin.png"
     plugin_version = "1.0.0"
     plugin_author = "OpenClaw Assistant"
     author_url = "https://github.com"
