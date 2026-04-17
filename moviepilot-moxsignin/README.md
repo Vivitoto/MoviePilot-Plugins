@@ -1,6 +1,6 @@
 # MoviePilot Mox SignIn Plugin
 
-一个面向 MoviePilot V2 的第三方插件仓库，提供 `MoxSignIn` 插件：
+一个面向 MoviePilot V2 的第三方插件仓库，提供 `MoxSignIn` 插件（显示名：`mox签到自用`）：
 
 - 自动访问 `https://mox.moxing.chat/forum/sign`
 - 自动登录
