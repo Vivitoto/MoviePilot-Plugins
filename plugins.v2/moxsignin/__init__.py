@@ -20,7 +20,7 @@ class MoxSignIn(_PluginBase):
     plugin_desc = "自动登录 mox.moxing.chat 执行每日签到抽奖并返回中奖信息。"
     plugin_icon = "moxsignin.png"
     plugin_version = "1.0.0"
-    plugin_author = "OpenClaw Assistant"
+    plugin_author = "Vivitoto"
     author_url = "https://github.com"
     plugin_config_prefix = "moxsignin_"
     plugin_order = 20
