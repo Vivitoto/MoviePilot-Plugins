@@ -20,7 +20,7 @@ class SehuatangSignin(_PluginBase):
     # 插件基础信息
     plugin_name = "98签到自用"
     plugin_desc = "自动登录98账号进行签到"
-    plugin_icon = "icon.png"
+    plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
     plugin_version = "0.0.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
