@@ -21,7 +21,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "自动登录98账号进行签到"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.0.1"
+    plugin_version = "0.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_"
@@ -464,6 +464,19 @@ class SehuatangSignin(_PluginBase):
                                 ]
                             }
                         ]
+                    },
+                    {
+                        'component': 'VDivider',
+                        'props': {'class': 'my-4'}
+                    },
+                    {
+                        'component': 'VAlert',
+                        'props': {
+                            'type': 'warning',
+                            'variant': 'tonal',
+                            'class': 'mt-2'
+                        },
+                        'text': '容器内需先安装依赖后再使用本插件。进入 MoviePilot 容器后执行：\n1. pip install playwright requests\n2. python -m playwright install chromium\n若容器里没有 pip/python，请改用 pip3/python3 对应命令。'
                     }
                 ]
             }
@@ -518,6 +531,13 @@ class SehuatangSignin(_PluginBase):
         async with self._lock:
             if not self._enabled:
                 return
+
+            env_error = await self._check_runtime_env()
+            if env_error:
+                self.log_error(env_error)
+                await self._send_notify("98签到自用环境缺失", env_error)
+                return
+
             if not self._accounts:
                 await self._send_notify("色花堂签到失败", "没有配置任何账号")
                 return
@@ -825,8 +845,30 @@ class SehuatangSignin(_PluginBase):
                 if json_match:
                     return json.loads(json_match.group())
             return None
-        except:
+        except Exception as e:
+            self.log_error(f"AI分析请求失败: {e}")
             return None
+
+    async def _check_runtime_env(self) -> Optional[str]:
+        """检查运行环境，缺失时返回错误文本"""
+        try:
+            import importlib.util
+            if importlib.util.find_spec("playwright") is None:
+                return "缺少 Python 依赖 playwright。请在 MoviePilot 容器内执行：pip install playwright requests"
+        except Exception:
+            return "Python 环境异常，无法检查 playwright 依赖。"
+
+        try:
+            test = await async_playwright().start()
+            browser = await test.chromium.launch(headless=True)
+            await browser.close()
+            await test.stop()
+            return None
+        except Exception as e:
+            msg = str(e)
+            if "Executable doesn't exist" in msg or "playwright install" in msg:
+                return "缺少 Chromium 浏览器运行时。请在 MoviePilot 容器内执行：python -m playwright install chromium"
+            return f"Playwright/Chromium 环境不可用：{msg}"
 
     async def _send_notify(self, title: str, message: str):
         try:
