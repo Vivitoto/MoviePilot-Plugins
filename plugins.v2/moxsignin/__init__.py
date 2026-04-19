@@ -1,6 +1,8 @@
 import html
 import json
+import random
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -786,6 +788,11 @@ class MoxSignIn(_PluginBase):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def run_once(self, source: str = "manual"):
+        # 随机延时 1-30 分钟，防止被识别为自动化工具
+        delay_seconds = random.randint(60, 1800)
+        self._log_step(f"随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒后开始执行（{source}）")
+        time.sleep(delay_seconds)
+        
         steps: List[str] = []
         trigger_text = "自动触发" if source == "cron" else "手动触发"
         result = {
