@@ -68,12 +68,13 @@ class UgreenSignIn(_PluginBase):
         if self._enabled and self._cron:
             logger.info(f"注册定时服务: {self._cron}")
 
-    def sign(self):
-        # 随机延时 1-30 分钟
-        import random
-        delay_seconds = random.randint(60, 1800)
-        logger.info(f"绿联论坛签到自用：随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒后开始执行")
-        time.sleep(delay_seconds)
+    def sign(self, source=None):
+        # 随机延时 1-30 分钟（仅定时任务触发时）
+        if source == "cron":
+            import random
+            delay_seconds = random.randint(60, 1800)
+            logger.info(f"绿联论坛签到自用：随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒后开始执行")
+            time.sleep(delay_seconds)
 
         logger.info("开始绿联论坛签到")
         if not self._cookie:
@@ -730,7 +731,7 @@ class UgreenSignIn(_PluginBase):
                 "name": "绿联论坛签到",
                 "trigger": CronTrigger.from_crontab(self._cron),
                 "func": self.sign,
-                "kwargs": {}
+                "kwargs": {"source": "cron"}
             }]
         return []
 
