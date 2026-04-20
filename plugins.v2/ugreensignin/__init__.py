@@ -18,7 +18,7 @@ class UgreenSignIn(_PluginBase):
     plugin_name = "绿联论坛签到自用"
     plugin_desc = "自动登录绿联论坛，刷新用户信息"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/ugreensignin.png"
-    plugin_version = "0.0.6"
+    plugin_version = "0.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "ugreensignin_"
@@ -33,6 +33,7 @@ class UgreenSignIn(_PluginBase):
     _username = ""
     _password = ""
     _history_days = 30
+    _uid = ""
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
@@ -45,6 +46,7 @@ class UgreenSignIn(_PluginBase):
             self._cookie = (config.get("cookie") or "").strip()
             self._username = (config.get("username") or "").strip()
             self._password = (config.get("password") or "").strip()
+            self._uid = (config.get("uid") or "").strip()
             try:
                 self._history_days = int(config.get("history_days", 30))
             except Exception:
@@ -645,6 +647,9 @@ class UgreenSignIn(_PluginBase):
             return False
 
     def _discover_uid(self, headers: Dict[str, str]) -> Optional[str]:
+        if self._uid:
+            logger.info(f"使用手动配置的UID: {self._uid}")
+            return self._uid
         try:
             # 方法1：访问个人中心看是否重定向到带uid的页面
             try:
@@ -761,6 +766,7 @@ class UgreenSignIn(_PluginBase):
                     {'component': 'VRow', 'content': [
                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名/手机号', 'placeholder': '用于自动登录（可选）'}}]},
                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password', 'placeholder': '用于自动登录（可选）'}}]},
+                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'uid', 'label': '用户UID', 'placeholder': '如 3332（可选，填后跳过自动发现）'}}]},
                     ]},
                     {'component': 'VRow', 'content': [
                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VCronField', 'props': {'model': 'cron', 'label': '签到周期'}}]},
@@ -782,6 +788,7 @@ class UgreenSignIn(_PluginBase):
             "username": "",
             "password": "",
             "history_days": 30,
+            "uid": "",
         }
 
     def get_page(self) -> List[dict]:
