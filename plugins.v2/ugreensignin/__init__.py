@@ -18,7 +18,7 @@ class UgreenSignIn(_PluginBase):
     plugin_name = "绿联论坛签到自用"
     plugin_desc = "自动登录绿联论坛，刷新用户信息"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/ugreensignin.png"
-    plugin_version = "0.0.5"
+    plugin_version = "0.0.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "ugreensignin_"
