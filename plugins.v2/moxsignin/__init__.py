@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -95,7 +95,8 @@ class MoxSignIn(_PluginBase):
                     func=self.run_once,
                     trigger="date",
                     run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-                    name="Mox签到自用"
+                    name="Mox签到自用",
+                    kwargs={"source": "cron"}
                 )
                 self._onlyonce = False
                 self.__update_config()
