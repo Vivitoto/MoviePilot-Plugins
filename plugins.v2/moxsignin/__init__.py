@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -171,8 +171,8 @@ class MoxSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
                                 ]
                             }]
                         }]
@@ -212,7 +212,8 @@ class MoxSignIn(_PluginBase):
                                     {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🛰️ 支持远程命令 /mox_signin 与 API /run'},
                                     {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔌 代理地址可自定义，示例：http://192.168.31.216:7890'},
                                     {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '👤 如自动识别用户资料失败，可手动填写用户ID'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔄 可单独选择执行签到时是否刷新用户信息与资产'}
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔄 可单独选择执行签到时是否刷新用户信息与资产'},
+                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '⏳ 定时任务触发后会随机延时 1-30 分钟再执行，避免整点并发'}
                                 ]
                             }]
                         }]

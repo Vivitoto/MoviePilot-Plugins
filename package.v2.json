@@ -16,11 +16,12 @@
     "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v1.0.2": "调整配置页开关顺序，将保存后执行一次移至最后；补充随机延时说明。",
       "v1.0.1": "增加随机延时1-30分钟，修复触发方式显示逻辑。",
       "v1.0.0": "优化用户信息块版式并正式发布。",
       "v0.1.3": "优化用户信息版式、通知刷新状态，并调整配置备注展示。",
