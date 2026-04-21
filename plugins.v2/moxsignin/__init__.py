@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -37,7 +37,7 @@ class MoxSignIn(_PluginBase):
     _cron = "10 9 * * *"
     _username = ""
     _password = ""
-    _proxy_url = "http://192.168.31.216:7890"
+    _proxy_url = ""
     _base_url = "https://mox.moxing.chat"
     _timeout = 20
     _timezone = "Asia/Shanghai"
@@ -81,9 +81,11 @@ class MoxSignIn(_PluginBase):
                 self._notify = config.get("notify", True)
                 self._onlyonce = config.get("onlyonce", False)
                 self._cron = config.get("cron") or "10 9 * * *"
-                self._username = config.get("username") or ""
-                self._password = config.get("password") or ""
-                self._proxy_url = config.get("proxy_url") or "http://192.168.31.216:7890"
+                self._username = str(config.get("username") or "").strip()
+                self._password = str(config.get("password") or "")
+                self._proxy_url = str(config.get("proxy_url") or "").strip()
+                self._base_url = str(config.get("base_url") or "https://mox.moxing.chat").strip().rstrip("/")
+                self._timeout = max(1, int(config.get("timeout") or 20))
                 self._remember = config.get("remember", True)
                 self._user_id = str(config.get("user_id") or "").strip()
                 self._refresh_user_info = config.get("refresh_user_info", True)
@@ -96,7 +98,7 @@ class MoxSignIn(_PluginBase):
                     trigger="date",
                     run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
                     name="Mox签到自用",
-                    kwargs={"source": "cron"}
+                    kwargs={"source": "onlyonce"}
                 )
                 self._onlyonce = False
                 self.__update_config()
@@ -169,11 +171,11 @@ class MoxSignIn(_PluginBase):
                             'content': [{
                                 'component': 'VRow',
                                 'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
                                 ]
                             }]
                         }]
@@ -192,29 +194,34 @@ class MoxSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'user_id', 'label': '用户ID（可选）', 'placeholder': '如 458775'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址', 'placeholder': 'http://192.168.31.216:7890'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://mox.moxing.chat'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（可留空）', 'placeholder': 'http://127.0.0.1:7890'}}]},
                                 ]
                             }]
                         }]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'tonal', 'class': 'mb-2'},
                         'content': [{
-                            'component': 'VCol',
-                            'props': {'cols': 12},
+                            'component': 'VCardItem',
                             'content': [{
-                                'component': 'VAlert',
-                                'props': {
-                                    'type': 'info',
-                                    'variant': 'tonal'
-                                },
+                                'component': 'VRow',
                                 'content': [
-                                    {'component': 'div', 'text': '🌐 固定站点：https://mox.moxing.chat ｜ ⏱️ 固定超时：20 秒 ｜ 🧭 固定时区：Asia/Shanghai'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🛰️ 支持远程命令 /mox_signin 与 API /run'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔌 代理地址可自定义，示例：http://192.168.31.216:7890'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '👤 如自动识别用户资料失败，可手动填写用户ID'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '🔄 可单独选择执行签到时是否刷新用户信息与资产'},
-                                    {'component': 'div', 'props': {'class': 'mt-1'}, 'text': '⏳ 定时任务触发后会随机延时 1-30 分钟再执行，避免整点并发'}
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
+                                        {'component': 'div', 'props': {'class': 'text-subtitle-2'}, 'text': '说明'},
+                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2'}, 'text': '• 支持远程命令 /mox_signin 与 API /run'},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 如自动识别用户资料失败，可手动填写用户 ID'},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 可单独控制签到后是否刷新用户信息与资产'},
+                                    ]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
+                                        {'component': 'div', 'props': {'class': 'text-subtitle-2'}, 'text': '默认行为'},
+                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2'}, 'text': '• 默认站点地址：https://mox.moxing.chat'},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 默认请求超时：20 秒'},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 固定时区：Asia/Shanghai'},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 仅定时任务会随机延时 1-30 分钟执行，手动/命令/API 触发将立即执行'},
+                                    ]},
                                 ]
                             }]
                         }]
@@ -228,7 +235,7 @@ class MoxSignIn(_PluginBase):
             "cron": "10 9 * * *",
             "username": "",
             "password": "",
-            "proxy_url": "http://192.168.31.216:7890",
+            "proxy_url": "",
             "base_url": "https://mox.moxing.chat",
             "timeout": 20,
             "timezone": "Asia/Shanghai",
@@ -341,7 +348,7 @@ class MoxSignIn(_PluginBase):
                     {'component': 'tbody', 'content': [{
                         'component': 'tr', 'content': [
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('executed_at', '-')},
-                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': '自动触发' if item.get('source') == 'cron' else '手动触发'},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('source_text') or self._source_text(item.get('source'))},
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('login_status', '-')},
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('signin_status', '-')},
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('reward_text', '-')},
@@ -464,7 +471,7 @@ class MoxSignIn(_PluginBase):
         logger.info(f"{self.plugin_name}：{message}")
 
     def _notify_text(self, result: Dict[str, Any]) -> str:
-        trigger = '自动触发' if result.get('source') == 'cron' else '手动触发'
+        trigger = self._source_text(result.get('source'))
         refresh_status = result.get('refresh_status', '未刷新')
         lines = [
             '✨ Mox 签到结果',
@@ -479,6 +486,14 @@ class MoxSignIn(_PluginBase):
             f"📝 结果说明：{result.get('message', '-')}",
         ]
         return "\n".join(lines)
+
+    def _source_text(self, source: Any) -> str:
+        source_value = str(source or '').strip().lower()
+        if source_value in {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic'}:
+            return '自动触发'
+        if source_value in {'command', 'api', 'manual', 'onlyonce'}:
+            return '手动触发'
+        return '自动触发' if 'cron' in source_value or 'sched' in source_value else '手动触发'
 
     def _save_result(self, result: Dict[str, Any]):
         history = self.get_data(self._history_key) or []
@@ -790,16 +805,17 @@ class MoxSignIn(_PluginBase):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def run_once(self, source: str = "manual"):
-        # 随机延时 1-30 分钟，防止被识别为自动化工具
-        delay_seconds = random.randint(60, 1800)
-        self._log_step(f"随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒后开始执行（{source}）")
-        time.sleep(delay_seconds)
-        
         steps: List[str] = []
-        trigger_text = "自动触发" if source == "cron" else "手动触发"
+        trigger_text = self._source_text(source)
+        if str(source).strip().lower() == 'cron':
+            delay_seconds = random.randint(60, 1800)
+            self._log_step(f"随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒后开始执行（{source}）")
+            steps.append(f"⏳ 定时任务随机延时 {delay_seconds // 60} 分 {delay_seconds % 60} 秒")
+            time.sleep(delay_seconds)
         result = {
             'executed_at': self._now_text(),
             'source': source,
+            'source_text': trigger_text,
             'login_status': '未开始',
             'signin_status': '未开始',
             'reward_text': '无',
