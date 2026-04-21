@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -174,8 +174,9 @@ class MoxSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'div'}]},
                                 ]
                             }]
                         }]
@@ -210,17 +211,34 @@ class MoxSignIn(_PluginBase):
                                 'component': 'VRow',
                                 'content': [
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2'}, 'text': '说明'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2'}, 'text': '• 支持远程命令 /mox_signin 与 API /run'},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 如自动识别用户资料失败，可手动填写用户 ID'},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 可单独控制签到后是否刷新用户信息与资产'},
+                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '📋 使用说明'},
+                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-account-search', 'size': 18, 'class': 'mr-2', 'color': 'primary'}},
+                                            {'component': 'span', 'text': '如自动识别用户资料失败，可手动填写用户 ID'}
+                                        ]},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-refresh-circle', 'size': 18, 'class': 'mr-2', 'color': 'success'}},
+                                            {'component': 'span', 'text': '可单独控制签到后是否刷新用户信息与资产'}
+                                        ]},
                                     ]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2'}, 'text': '默认行为'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2'}, 'text': '• 默认站点地址：https://mox.moxing.chat'},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 默认请求超时：20 秒'},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 固定时区：Asia/Shanghai'},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2'}, 'text': '• 仅定时任务会随机延时 1-30 分钟执行，手动/命令/API 触发将立即执行'},
+                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '⚙️ 默认行为'},
+                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-web', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
+                                            {'component': 'span', 'text': '默认站点：https://mox.moxing.chat'}
+                                        ]},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-timer-outline', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
+                                            {'component': 'span', 'text': '默认超时：20 秒'}
+                                        ]},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-map-clock', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
+                                            {'component': 'span', 'text': '固定时区：Asia/Shanghai'}
+                                        ]},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-shuffle', 'size': 18, 'class': 'mr-2', 'color': 'warning'}},
+                                            {'component': 'span', 'text': '仅定时任务会随机延时 1-30 分钟执行'}
+                                        ]},
                                     ]},
                                 ]
                             }]
@@ -333,7 +351,7 @@ class MoxSignIn(_PluginBase):
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
-                {'component': 'VCardTitle', 'text': '🗂️ 执行记录'},
+                {'component': 'VCardTitle', 'text': f'🗂️ 执行记录（共 {len(history)} 条）'},
                 {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
                     {'component': 'thead', 'content': [{
                         'component': 'tr', 'content': [
