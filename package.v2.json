@@ -16,11 +16,12 @@
     "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v1.0.4": "仅对 cron 定时任务保留 1-30 分钟随机延时；手动/命令/API 触发改为立即执行，代理默认留空，站点地址与请求超时改为可配置，并调整配置页说明与触发方式展示逻辑。",
       "v1.0.3": "修复 onlyonce 保存后执行的 source 参数传递，确保触发方式正确显示。",
       "v1.0.2": "调整配置页开关顺序，将保存后执行一次移至最后；补充随机延时说明。",
       "v1.0.1": "增加随机延时1-30分钟，修复触发方式显示逻辑。",
