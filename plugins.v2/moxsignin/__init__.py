@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -94,11 +94,11 @@ class MoxSignIn(_PluginBase):
                 logger.info("Mox签到自用：保存配置后执行一次")
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
                 self._scheduler.add_job(
-                    func=self.run_once,
+                    func=self.run_by_onlyonce,
                     trigger="date",
                     run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
                     name="Mox签到自用",
-                    kwargs={"source": "onlyonce"}
+                    kwargs={}
                 )
                 self._onlyonce = False
                 self.__update_config()
@@ -152,8 +152,8 @@ class MoxSignIn(_PluginBase):
             "id": "MoxSignIn",
             "name": "Mox签到自用",
             "trigger": CronTrigger.from_crontab(self._cron),
-            "func": self.run_once,
-            "kwargs": {"source": "cron"}
+            "func": self.run_by_cron,
+            "kwargs": {}
         }]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -381,6 +381,16 @@ class MoxSignIn(_PluginBase):
 
     def api_run(self):
         return self.run_once(source="api")
+
+    def run_by_cron(self):
+        """供主调度器调用：定时任务执行"""
+        self._log_step("【run_by_cron】被主调度器调用，source=cron")
+        return self.run_once(source="cron")
+
+    def run_by_onlyonce(self):
+        """供初始化调度器调用：保存后执行一次"""
+        self._log_step("【run_by_onlyonce】被初始化调度器调用，source=onlyonce")
+        return self.run_once(source="onlyonce")
 
     @eventmanager.register(EventType.PluginAction)
     def remote_run(self, event: Event):
