@@ -21,7 +21,7 @@
     "name": "司机签到自用",
     "description": "司机社(xsijishe.net)自动登录签到。基于真实 HAR 流量分析重构。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.0.0",
+    "version": "0.0.2",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png",
     "author": "Vivitoto",
     "level": 1,
