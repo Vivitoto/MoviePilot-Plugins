@@ -23,9 +23,9 @@ from app.schemas.types import EventType
 
 class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
-    plugin_desc = "司机社(xsijishe.net)自动登录签到。基于真实 HAR 流量分析重构。"
+    plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png"
-    plugin_version = "0.0.5"
+    plugin_version = "0.0.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -316,9 +316,7 @@ class SijisheSignIn(_PluginBase):
             asset_history = sorted(asset_history, key=lambda x: x.get('date', ''))[-30:]  # 最近30条
             dates = [item.get('date', '') for item in asset_history]
             credits_data = [item.get('credits', 0) for item in asset_history]
-            prestige_data = [item.get('prestige', 0) for item in asset_history]
             tickets_data = [item.get('tickets', 0) for item in asset_history]
-            contribution_data = [item.get('contribution', 0) for item in asset_history]
             
             components.append({
                 'component': 'VCard',
@@ -340,9 +338,7 @@ class SijisheSignIn(_PluginBase):
                              },
                              'series': [
                                  {'name': '积分', 'data': credits_data},
-                                 {'name': '威望', 'data': prestige_data},
                                  {'name': '车票', 'data': tickets_data},
-                                 {'name': '贡献', 'data': contribution_data},
                              ]
                          }}
                     ]}
@@ -373,7 +369,7 @@ class SijisheSignIn(_PluginBase):
                                 {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('source_text', '-')},
                                 {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('login_status', '-')},
                                 {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('signin_status', '-')},
-                                {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('reward_text', '-')},
+                                {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('reward', '-') or '-'},
                                 {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('message', '-')[:30]},
                             ]
                         } for item in history[:30]]}
@@ -449,9 +445,14 @@ class SijisheSignIn(_PluginBase):
             f"🚦 触发方式：{trigger}",
             f"🔐 登录状态：{result.get('login_status', '-')}",
             f"✍️ 签到状态：{result.get('signin_status', '-')}",
+        ]
+        reward = result.get('reward')
+        if reward:
+            lines.append(f"🎁 签到奖励：{reward}")
+        lines.extend([
             f"🧭 执行模式：{'FlareSolverr' if result.get('use_flaresolverr') else 'requests'}",
             f"📝 结果说明：{result.get('message', '-')}",
-        ]
+        ])
         return "\n".join(lines)
 
     def _md5(self, text: str) -> str:
@@ -577,15 +578,35 @@ class SijisheSignIn(_PluginBase):
         self.save_data(self._asset_history_key, history)
 
     def _refresh_user_info_requests(self, session: requests.Session, uid: Optional[str] = None):
-        uid = uid or self._extract_uid(session)
+        uid = uid or self._extract_uid(session) or self._uid
         if not uid:
+            self._log_step("刷新用户信息失败：无法确定 UID")
             return None
+        self._log_step(f"刷新用户资料页: {self._base_url}/home.php?mod=space&uid={uid}")
         resp = session.get(f"{self._base_url}/home.php?mod=space&uid={uid}", timeout=self._timeout)
         resp.raise_for_status()
         info = self._parse_user_info_html(resp.text, uid=uid)
         self.save_data(self._user_info_key, info)
         self._save_asset_point(info)
+        self._log_step(f"用户信息已刷新：积分={info.get('credits') or '-'} 威望={info.get('prestige') or '-'} 贡献={info.get('contribution') or '-'}")
         return info
+
+    def _extract_reward(self, text: str) -> Optional[str]:
+        """从签到响应文本中提取奖励信息"""
+        if not text:
+            return None
+        patterns = [
+            r'获得\s*([^<\n]{1,30}?\+\d+[^<\n]{0,20})',
+            r'奖励[：:]\s*([^<\n]{1,30})',
+            r'签到成功[，,]\s*([^<\n]{1,40})',
+            r'恭喜[^<\n]{0,10}获得\s*([^<\n]{1,30})',
+        ]
+        for p in patterns:
+            m = re.search(p, text)
+            if m:
+                reward = html.unescape(m.group(1)).strip()
+                return reward if len(reward) < 50 else reward[:50]
+        return None
 
     def _refresh_user_info_fs(self, sid: str, uid: Optional[str] = None):
         target_uid = uid or self._uid or '747026'
@@ -622,7 +643,9 @@ class SijisheSignIn(_PluginBase):
         except Exception as e:
             return False, f"FlareSolverr 登录异常: {str(e)}"
 
-    def _signin_fs(self, sid: str) -> Tuple[bool, str]:
+    def _signin_fs(self, sid: str) -> Tuple[bool, str, Optional[str]]:
+        """FlareSolverr 签到，返回 (是否成功, 消息, 奖励)"""
+        reward = None
         try:
             self._fs_get(sid, f"{self._base_url}/k_misign-sign.html")
             target_uid = self._uid or '747026'
@@ -637,17 +660,35 @@ class SijisheSignIn(_PluginBase):
                 html_text = sol.get("response") or html_text
             formhash = self._get_formhash(html_text)
             if not formhash:
-                return False, "无法获取签到 formhash"
+                return False, "无法获取签到 formhash", None
             data = self._fs_get(sid, f"{self._base_url}/plugin.php?id=k_misign:sign&operation=qiandao&formhash={formhash}&format=empty&inajax=1&ajaxtarget=JD_sign")
-            cookies = data.get("solution", {}).get("cookies") or []
-            if any("misigntime" in c.get("name", "").lower() for c in cookies):
-                return True, "签到完成"
             resp = data.get("solution", {}).get("response") or ""
-            if "已签到" in resp:
-                return True, "今日已签到"
-            return True, "签到完成"
+            cookies = data.get("solution", {}).get("cookies") or []
+
+            # 提取奖励
+            reward = self._extract_reward(resp)
+
+            # 判据：优先看 cookie misigntime
+            had_misigntime_before = any("misigntime" in c.get("name", "").lower() for c in cookies)
+            if any("misigntime" in c.get("name", "").lower() for c in cookies):
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到完成", None
+
+            # 文本判据
+            if "今日已签到" in resp or "已签到" in resp:
+                return True, "今日已签到", None
+            if "签到成功" in resp:
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到成功", None
+
+            # 兜底
+            if reward:
+                return True, f"签到完成：{reward}", reward
+            return True, "签到完成", None
         except Exception as e:
-            return False, f"FlareSolverr 签到异常: {str(e)}"
+            return False, f"FlareSolverr 签到异常: {str(e)}", None
 
     def _login(self, session: requests.Session) -> Tuple[bool, str]:
         """登录并返回(是否成功, 消息)"""
@@ -711,44 +752,60 @@ class SijisheSignIn(_PluginBase):
         except Exception as e:
             return False, f"登录异常: {str(e)}"
 
-    def _signin(self, session: requests.Session) -> Tuple[bool, str]:
-        """签到并返回(是否成功, 消息)"""
+    def _signin(self, session: requests.Session) -> Tuple[bool, str, Optional[str]]:
+        """签到并返回(是否成功, 消息, 奖励)"""
         try:
-            # 1. 访问签到页面
             sign_page_url = f"{self._base_url}/k_misign-sign.html"
             self._log_step(f"访问签到页: {sign_page_url}")
-            session.get(sign_page_url, timeout=self._timeout)
-            
-            # 2. 从用户空间获取 formhash（HAR 真实流程）
-            uid = self._extract_uid(session)
-            formhash = None
-            if uid:
+            sign_resp = session.get(sign_page_url, timeout=self._timeout)
+
+            # 先尝试直接从签到页取 formhash；失败再回退到用户空间页
+            formhash = self._get_formhash(sign_resp.text or "")
+            uid = self._extract_uid(session) or self._uid
+            if not formhash and uid:
                 space_url = f"{self._base_url}/home.php?mod=space&uid={uid}"
+                self._log_step(f"签到页未取到 formhash，回退到用户空间: {space_url}")
                 resp = session.get(space_url, timeout=self._timeout)
-                formhash = self._get_formhash(resp.text)
-            
+                formhash = self._get_formhash(resp.text or "")
+
             if not formhash:
-                return False, "无法获取签到 formhash"
-            
+                # 最后再试首页，防止表单散落在其他页面
+                self._log_step("用户空间仍未取到 formhash，回退首页再试一次")
+                home_resp = session.get(f"{self._base_url}/", timeout=self._timeout)
+                formhash = self._get_formhash(home_resp.text or "")
+
+            if not formhash:
+                return False, f"无法获取签到 formhash（uid={uid or '-'}）", None
+
             self._log_step(f"签到 formhash={formhash}")
-            
-            # 3. 提交签到
             sign_url = f"{self._base_url}/plugin.php?id=k_misign:sign&operation=qiandao&formhash={formhash}&format=empty&inajax=1&ajaxtarget=JD_sign"
             self._log_step(f"执行签到: {sign_url}")
             resp = session.get(sign_url, timeout=self._timeout)
-            
-            # 解析签到结果
+
+            # 提取奖励
+            reward = self._extract_reward(resp.text or "")
+
+            # 以 cookie 为优先判据
+            if any("misigntime" in c.name.lower() for c in session.cookies):
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到完成", None
+
             if "今日已签到" in resp.text or "已签到" in resp.text:
-                return True, "今日已签到"
+                return True, "今日已签到", None
             elif "签到成功" in resp.text:
-                return True, "签到成功"
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到成功", None
             elif resp.status_code == 200:
-                return True, "签到完成"
+                if reward:
+                    return True, f"签到完成：{reward}", reward
+                return True, "签到完成", None
             else:
-                return True, f"签到响应: {resp.text[:200]}"
-                
+                return False, f"签到响应异常: {resp.text[:200]}", None
+
         except Exception as e:
-            return False, f"签到异常: {str(e)}"
+            return False, f"签到异常: {str(e)}", None
 
     def run_once(self, source: str = "manual"):
         steps: List[str] = []
@@ -767,6 +824,7 @@ class SijisheSignIn(_PluginBase):
             'source_text': trigger_text,
             'login_status': '未开始',
             'signin_status': '未开始',
+            'reward': None,
             'result_label': '执行中',
             'message': '',
             'finished': False,
@@ -830,10 +888,14 @@ class SijisheSignIn(_PluginBase):
             steps.append('✍️ 开始签到')
             self._log_step("开始签到")
             if self._use_flaresolverr:
-                sign_success, sign_msg = self._signin_fs(fs_session)
+                sign_success, sign_msg, reward = self._signin_fs(fs_session)
             else:
-                sign_success, sign_msg = self._signin(session)
+                sign_success, sign_msg, reward = self._signin(session)
             result['signin_status'] = '成功' if sign_success else '失败'
+            result['reward'] = reward
+            if reward:
+                steps.append(f"🎁 签到奖励：{reward}")
+                self._log_step(f"签到奖励：{reward}")
             steps.append(f"✍️ 签到{'成功' if sign_success else '失败'}: {sign_msg}")
             self._log_step(f"签到{'成功' if sign_success else '失败'}: {sign_msg}")
 
@@ -848,6 +910,7 @@ class SijisheSignIn(_PluginBase):
             result.update({
                 'result_label': '成功' if sign_success else '失败',
                 'message': sign_msg,
+                'reward': reward,
                 'finished': True
             })
 
