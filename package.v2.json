@@ -26,7 +26,7 @@
     "author": "Vivitoto",
     "level": 1,
     "history": {
-      "v1.0.0": "基于 HAR 流量分析重构：修正 Cookie 前缀，完善登录流程（先访问首页获取会话，再提取 formhash/loginhash 提交登录，优先检查 auth cookie 判断成功），签到流程改为从用户空间获取 formhash，新增 UID 自动提取。"
+      "v0.0.2": "基于 HAR 流量分析重构：修正 Cookie 前缀，完善登录流程（先访问首页获取会话，再提取 formhash/loginhash 提交登录，优先检查 auth cookie 判断成功），签到流程改为从用户空间获取 formhash，新增 UID 自动提取。"
     }
   },
   "UgreenSignIn": {
