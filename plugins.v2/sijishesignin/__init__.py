@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png"
-    plugin_version = "0.0.6"
+    plugin_version = "0.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -548,18 +548,41 @@ class SijisheSignIn(_PluginBase):
         def pick(pattern: str) -> Optional[str]:
             m = re.search(pattern, html_text, re.S)
             return html.unescape(m.group(1)).strip().strip(',') if m else None
+        def pick_any(patterns):
+            for p in patterns:
+                v = pick(p)
+                if v:
+                    return v
+            return None
         info = {
             "username": self._username,
             "uid": uid,
-            "credits": pick(r'积分\s*(?:</[^>]+>\s*)*([\d,]+)'),
-            "prestige": pick(r'威望\s*(?:</[^>]+>\s*)*([\d,]+)'),
-            "tickets": pick(r'车票\s*(?:</[^>]+>\s*)*([\d,]+)'),
-            "contribution": pick(r'贡献\s*(?:</[^>]+>\s*)*([\d,]+)'),
+            "credits": pick_any([
+                r'积分\s*(?:</[^>]+>\s*)*([\d,]+)',
+                r'积分[：:]\s*([\d,]+)',
+                r'积分</em>\s*([\d,]+)',
+            ]),
+            "prestige": pick_any([
+                r'威望\s*(?:</[^>]+>\s*)*([\d,]+)',
+                r'威望[：:]\s*([\d,]+)',
+                r'威望</em>\s*([\d,]+)',
+            ]),
+            "tickets": pick_any([
+                r'车票\s*(?:</[^>]+>\s*)*([\d,]+)',
+                r'车票[：:]\s*([\d,]+)',
+                r'车票</em>\s*([\d,]+)',
+            ]),
+            "contribution": pick_any([
+                r'贡献\s*(?:</[^>]+>\s*)*([\d,]+)',
+                r'贡献[：:]\s*([\d,]+)',
+                r'贡献</em>\s*([\d,]+)',
+            ]),
             "reg_time": pick(r'注册时间</em>([^<]+)</li>') or pick(r'注册时间\s*([\d\-:\s]+)'),
             "last_visit": pick(r'最后访问</em>([^<]+)</li>') or pick(r'最后访问\s*([\d\-:\s]+)'),
         }
         group_match = re.search(r'Lv\.[^<\s]+[^<]{0,20}', html_text)
-        info["user_group"] = html.unescape(group_match.group(0)).strip() if group_match else pick(r'用户组\s*(?:</[^>]+>\s*)*([^<\\n]+)')
+        info["user_group"] = html.unescape(group_match.group(0)).strip() if group_match else pick(r'用户组\s*(?:</[^>]+>\s*)*([^<\n]+)')
+        self._log_step(f"解析用户信息结果：积分={info.get('credits') or '-'} 威望={info.get('prestige') or '-'} 车票={info.get('tickets') or '-'} 贡献={info.get('contribution') or '-'} 用户组={info.get('user_group') or '-'}")
         return info
 
     def _save_asset_point(self, user_info: Dict[str, Any]):
@@ -595,16 +618,23 @@ class SijisheSignIn(_PluginBase):
         """从签到响应文本中提取奖励信息"""
         if not text:
             return None
+        text = html.unescape(text)
         patterns = [
-            r'获得\s*([^<\n]{1,30}?\+\d+[^<\n]{0,20})',
+            r'获得\s*([^<\n]{1,40})',
             r'奖励[：:]\s*([^<\n]{1,30})',
             r'签到成功[，,]\s*([^<\n]{1,40})',
-            r'恭喜[^<\n]{0,10}获得\s*([^<\n]{1,30})',
+            r'恭喜[^<\n]{0,20}获得\s*([^<\n]{1,30})',
+            r'积分\s*\+\s*(\d+)',
+            r'威望\s*\+\s*(\d+)',
+            r'车票\s*\+\s*(\d+)',
         ]
         for p in patterns:
             m = re.search(p, text)
             if m:
-                reward = html.unescape(m.group(1)).strip()
+                reward = m.group(1).strip()
+                if reward.isdigit():
+                    field = "积分" if "积分" in p else ("威望" if "威望" in p else "车票")
+                    reward = f"{field} +{reward}"
                 return reward if len(reward) < 50 else reward[:50]
         return None
 
@@ -667,21 +697,25 @@ class SijisheSignIn(_PluginBase):
 
             # 提取奖励
             reward = self._extract_reward(resp)
+            self._log_step(f"签到响应片段（前200字）：{resp[:200].replace(chr(10),' ').replace(chr(13),' ')}")
+            if reward:
+                self._log_step(f"提取到奖励：{reward}")
 
-            # 判据：优先看 cookie misigntime
-            had_misigntime_before = any("misigntime" in c.get("name", "").lower() for c in cookies)
-            if any("misigntime" in c.get("name", "").lower() for c in cookies):
-                if reward:
-                    return True, f"签到成功：{reward}", reward
-                return True, "签到完成", None
-
-            # 文本判据
-            if "今日已签到" in resp or "已签到" in resp:
+            # 判据：文本优先（更明确，能区分"今日已签到"和"首次签到成功"）
+            if any(k in resp for k in ["今日已签到", "已经签到", "已完成签到", "请勿重复签到", "重复签到"]):
                 return True, "今日已签到", None
+            if "非法字符" in resp or "已经被系统拒绝" in resp:
+                return True, "今日已签到（非法字符：重复请求）", None
             if "签到成功" in resp:
                 if reward:
                     return True, f"签到成功：{reward}", reward
                 return True, "签到成功", None
+
+            # cookie 判据兜底
+            if any("misigntime" in c.get("name", "").lower() for c in cookies):
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到完成", None
 
             # 兜底
             if reward:
@@ -784,20 +818,27 @@ class SijisheSignIn(_PluginBase):
 
             # 提取奖励
             reward = self._extract_reward(resp.text or "")
+            self._log_step(f"签到响应片段（前200字）：{resp.text[:200].replace(chr(10),' ').replace(chr(13),' ') if resp.text else '(空)'}")
+            if reward:
+                self._log_step(f"提取到奖励：{reward}")
 
-            # 以 cookie 为优先判据
+            # 以文本判据优先
+            if any(k in resp.text for k in ["今日已签到", "已经签到", "已完成签到", "请勿重复签到", "重复签到"]):
+                return True, "今日已签到", None
+            if "非法字符" in resp.text or "已经被系统拒绝" in resp.text:
+                return True, "今日已签到（非法字符：重复请求）", None
+            if "签到成功" in resp.text:
+                if reward:
+                    return True, f"签到成功：{reward}", reward
+                return True, "签到成功", None
+
+            # cookie 兜底判据
             if any("misigntime" in c.name.lower() for c in session.cookies):
                 if reward:
                     return True, f"签到成功：{reward}", reward
                 return True, "签到完成", None
 
-            if "今日已签到" in resp.text or "已签到" in resp.text:
-                return True, "今日已签到", None
-            elif "签到成功" in resp.text:
-                if reward:
-                    return True, f"签到成功：{reward}", reward
-                return True, "签到成功", None
-            elif resp.status_code == 200:
+            if resp.status_code == 200:
                 if reward:
                     return True, f"签到完成：{reward}", reward
                 return True, "签到完成", None
