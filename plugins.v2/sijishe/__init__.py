@@ -23,9 +23,9 @@ from app.schemas.types import EventType
 
 class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
-    plugin_desc = "用于司机社的自用签到插件，支持自动登录并完成每日签到。"
+    plugin_desc = "司机社(xsijishe.net)自动登录签到。基于真实 HAR 流量分析重构。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png"
-    plugin_version = "0.0.1"
+    plugin_version = "1.0.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -449,14 +449,36 @@ class SijisheSignIn(_PluginBase):
 
     def _get_loginhash(self, text: str) -> Optional[str]:
         """从HTML中提取loginhash"""
-        match = re.search(r'loginhash=([a-zA-Z0-9]{5})', text)
+        match = re.search(r'loginhash=([a-zA-Z0-9]+)', text)
         if match:
             return match.group(1)
+        return None
+
+    def _extract_uid(self, session: requests.Session) -> Optional[str]:
+        """从 cookie 中提取 UID"""
+        import urllib.parse
+        # 尝试 creditnotice cookie
+        for cookie in session.cookies:
+            if "creditnotice" in cookie.name:
+                decoded = urllib.parse.unquote(cookie.value)
+                match = re.search(r'(\d+)', decoded)
+                if match:
+                    return match.group(1)
+        # 尝试 lastcheckfeed cookie
+        for cookie in session.cookies:
+            if "lastcheckfeed" in cookie.name:
+                parts = cookie.value.split("|")
+                if parts and parts[0].isdigit():
+                    return parts[0]
         return None
 
     def _login(self, session: requests.Session) -> Tuple[bool, str]:
         """登录并返回(是否成功, 消息)"""
         try:
+            # 0. 先访问首页获取初始 cookie
+            self._log_step("访问首页获取初始会话...")
+            session.get(f"{self._base_url}/", timeout=self._timeout, allow_redirects=True)
+            
             # 1. 获取登录框，提取 formhash 和 loginhash
             login_form_url = f"{self._base_url}/member.php?mod=logging&action=login&infloat=yes&handlekey=login&inajax=1&ajaxtarget=fwin_content_login"
             self._log_step(f"获取登录框: {login_form_url}")
@@ -490,20 +512,21 @@ class SijisheSignIn(_PluginBase):
             resp = session.post(login_url, data=post_data, timeout=self._timeout)
             resp.raise_for_status()
             
-            # 检查登录结果
+            # 优先检查 auth cookie（HAR 中登录成功后返回空响应但设置 auth cookie）
+            for cookie in session.cookies:
+                if "auth" in cookie.name.lower():
+                    return True, "登录成功"
+            
+            # 其次检查响应文本
             if "登录成功" in resp.text or "欢迎您回来" in resp.text:
                 return True, "登录成功"
-            elif "密码错误" in resp.text or "密码" in resp.text and "错误" in resp.text:
+            elif "密码错误" in resp.text or ("密码" in resp.text and "错误" in resp.text):
                 return False, "密码错误"
             elif "用户不存在" in resp.text:
                 return False, "用户不存在"
             elif "登录失败" in resp.text:
                 return False, "登录失败"
             else:
-                # 检查是否有 auth cookie
-                for cookie in session.cookies:
-                    if "auth" in cookie.name.lower():
-                        return True, "登录成功(通过Cookie验证)"
                 return False, f"登录结果未知: {resp.text[:200]}"
                 
         except RequestException as e:
@@ -514,41 +537,39 @@ class SijisheSignIn(_PluginBase):
     def _signin(self, session: requests.Session) -> Tuple[bool, str]:
         """签到并返回(是否成功, 消息)"""
         try:
-            # 1. 访问签到页面获取 formhash
+            # 1. 访问签到页面
             sign_page_url = f"{self._base_url}/k_misign-sign.html"
-            self._log_step(f"获取签到页: {sign_page_url}")
-            resp = session.get(sign_page_url, timeout=self._timeout)
-            resp.raise_for_status()
+            self._log_step(f"访问签到页: {sign_page_url}")
+            session.get(sign_page_url, timeout=self._timeout)
             
-            # 检查是否已经签到
-            if "今日已签到" in resp.text or "已签到" in resp.text:
-                return True, "今日已签到"
+            # 2. 从用户空间获取 formhash（HAR 真实流程）
+            uid = self._extract_uid(session)
+            formhash = None
+            if uid:
+                space_url = f"{self._base_url}/home.php?mod=space&uid={uid}"
+                resp = session.get(space_url, timeout=self._timeout)
+                formhash = self._get_formhash(resp.text)
             
-            formhash = self._get_formhash(resp.text)
             if not formhash:
                 return False, "无法获取签到 formhash"
             
             self._log_step(f"签到 formhash={formhash}")
             
-            # 2. 提交签到
+            # 3. 提交签到
             sign_url = f"{self._base_url}/plugin.php?id=k_misign:sign&operation=qiandao&formhash={formhash}&format=empty&inajax=1&ajaxtarget=JD_sign"
-            self._log_step(f"提交签到: {sign_url}")
+            self._log_step(f"执行签到: {sign_url}")
             resp = session.get(sign_url, timeout=self._timeout)
-            resp.raise_for_status()
             
             # 解析签到结果
-            if "今日已签到" in resp.text:
+            if "今日已签到" in resp.text or "已签到" in resp.text:
                 return True, "今日已签到"
             elif "签到成功" in resp.text:
                 return True, "签到成功"
-            elif resp.text.strip() == "":
-                # 空响应通常表示成功
+            elif resp.status_code == 200:
                 return True, "签到完成"
             else:
                 return True, f"签到响应: {resp.text[:200]}"
                 
-        except RequestException as e:
-            return False, f"签到请求失败: {str(e)}"
         except Exception as e:
             return False, f"签到异常: {str(e)}"
 

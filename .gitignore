@@ -6,3 +6,7 @@ __pycache__/
 .env.*
 *.log
 .DS_Store
+icons/generated/
+_jiumian_app.py
+_vito_readme.md
+_vito_workflow.yml
