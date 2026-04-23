@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "司机社(xsijishe.net)自动登录签到。基于真实 HAR 流量分析重构。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png"
-    plugin_version = "0.0.2"
+    plugin_version = "0.0.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -42,6 +42,9 @@ class SijisheSignIn(_PluginBase):
     _base_url = "https://xsijishe.net"
     _timeout = 20
     _timezone = "Asia/Shanghai"
+    _uid = ""
+    _use_flaresolverr = False
+    _flaresolverr_url = "http://127.0.0.1:8191/v1"
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -62,6 +65,9 @@ class SijisheSignIn(_PluginBase):
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
                 self._base_url = str(config.get("base_url") or "https://xsijishe.net").strip().rstrip("/")
                 self._timeout = max(1, int(config.get("timeout") or 20))
+                self._uid = str(config.get("uid") or "").strip()
+                self._use_flaresolverr = config.get("use_flaresolverr", False)
+                self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191/v1").strip()
 
             if self._onlyonce:
                 logger.info("司机社签到自用：保存配置后执行一次")
@@ -95,6 +101,9 @@ class SijisheSignIn(_PluginBase):
             "base_url": self._base_url,
             "timeout": self._timeout,
             "timezone": self._timezone,
+            "uid": self._uid,
+            "use_flaresolverr": self._use_flaresolverr,
+            "flaresolverr_url": self._flaresolverr_url,
         })
 
     @staticmethod
@@ -144,6 +153,7 @@ class SijisheSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr'}}]},
                                 ]
                             }]
                         }]
@@ -159,11 +169,13 @@ class SijisheSignIn(_PluginBase):
                                     {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mb-3'}, 'text': '账号配置'}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password', 'placeholder': '明文密码，会自动MD5加密'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'uid', 'label': 'UID（可选）', 'placeholder': '如 747026；自动发现失败时作为兜底'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://xsijishe.net'}}]},
                                     {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（可留空）', 'placeholder': 'http://127.0.0.1:7890'}}]},
+                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191/v1'}}]},
                                 ]
                             }]
                         }]
@@ -181,6 +193,10 @@ class SijisheSignIn(_PluginBase):
                                         {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
                                             {'component': 'VIcon', 'props': {'icon': 'mdi-lock', 'size': 18, 'class': 'mr-2', 'color': 'primary'}},
                                             {'component': 'span', 'text': '密码使用明文填写，登录时会自动MD5加密'}
+                                        ]},
+                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
+                                            {'component': 'VIcon', 'props': {'icon': 'mdi-card-account-details-outline', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
+                                            {'component': 'span', 'text': 'UID 可留空自动发现；失败时可手填作为用户资料兜底'}
                                         ]},
                                         {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
                                             {'component': 'VIcon', 'props': {'icon': 'mdi-web-network', 'size': 18, 'class': 'mr-2', 'color': 'warning'}},
@@ -219,6 +235,9 @@ class SijisheSignIn(_PluginBase):
             "base_url": "https://xsijishe.net",
             "timeout": 20,
             "timezone": "Asia/Shanghai",
+            "uid": "",
+            "use_flaresolverr": False,
+            "flaresolverr_url": "http://127.0.0.1:8191/v1",
         }
 
     def get_page(self) -> List[dict]:
@@ -430,6 +449,7 @@ class SijisheSignIn(_PluginBase):
             f"🚦 触发方式：{trigger}",
             f"🔐 登录状态：{result.get('login_status', '-')}",
             f"✍️ 签到状态：{result.get('signin_status', '-')}",
+            f"🧭 执行模式：{'FlareSolverr' if result.get('use_flaresolverr') else 'requests'}",
             f"📝 结果说明：{result.get('message', '-')}",
         ]
         return "\n".join(lines)
@@ -455,22 +475,179 @@ class SijisheSignIn(_PluginBase):
         return None
 
     def _extract_uid(self, session: requests.Session) -> Optional[str]:
-        """从 cookie 中提取 UID"""
+        """从 cookie 中提取 UID；失败时回落到手动配置的 UID"""
         import urllib.parse
-        # 尝试 creditnotice cookie
         for cookie in session.cookies:
             if "creditnotice" in cookie.name:
                 decoded = urllib.parse.unquote(cookie.value)
                 match = re.search(r'(\d+)', decoded)
                 if match:
                     return match.group(1)
-        # 尝试 lastcheckfeed cookie
         for cookie in session.cookies:
             if "lastcheckfeed" in cookie.name:
                 parts = cookie.value.split("|")
                 if parts and parts[0].isdigit():
                     return parts[0]
-        return None
+        return self._uid or None
+    def _extract_uid_from_fs_cookies(self, cookies: List[dict]) -> Optional[str]:
+        import urllib.parse
+        for cookie in cookies or []:
+            name = cookie.get("name", "")
+            value = str(cookie.get("value", ""))
+            if "creditnotice" in name:
+                decoded = urllib.parse.unquote(value)
+                match = re.search(r'(\d+)', decoded)
+                if match:
+                    return match.group(1)
+            if "lastcheckfeed" in name:
+                parts = urllib.parse.unquote(value).split("|")
+                if parts and parts[0].isdigit():
+                    return parts[0]
+        return self._uid or None
+
+    def _fs_call(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Dict[str, Any]:
+        r = requests.post(self._flaresolverr_url, json=payload, timeout=timeout or max(self._timeout * 4, 90))
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") != "ok":
+            raise RuntimeError(data.get("message") or "FlareSolverr 调用失败")
+        return data
+
+    def _fs_proxy(self) -> Optional[Dict[str, Any]]:
+        return {"url": self._proxy_url} if self._proxy_url else None
+
+    def _fs_create_session(self) -> str:
+        sid = f"sijishe-{int(time.time())}-{random.randint(1000,9999)}"
+        self._fs_call({"cmd": "sessions.create", "session": sid}, timeout=30)
+        return sid
+
+    def _fs_destroy_session(self, sid: str):
+        try:
+            self._fs_call({"cmd": "sessions.destroy", "session": sid}, timeout=30)
+        except Exception:
+            pass
+
+    def _fs_get(self, sid: str, url: str, max_timeout: int = 90000) -> Dict[str, Any]:
+        payload = {"cmd": "request.get", "session": sid, "url": url, "maxTimeout": max_timeout}
+        proxy = self._fs_proxy()
+        if proxy:
+            payload["proxy"] = proxy
+        return self._fs_call(payload)
+
+    def _fs_post(self, sid: str, url: str, post_data: str, headers: Optional[Dict[str, str]] = None, max_timeout: int = 90000) -> Dict[str, Any]:
+        payload = {"cmd": "request.post", "session": sid, "url": url, "postData": post_data, "maxTimeout": max_timeout}
+        if headers:
+            payload["headers"] = headers
+        proxy = self._fs_proxy()
+        if proxy:
+            payload["proxy"] = proxy
+        return self._fs_call(payload)
+
+    def _parse_user_info_html(self, html_text: str, uid: Optional[str] = None) -> Dict[str, Any]:
+        def pick(pattern: str) -> Optional[str]:
+            m = re.search(pattern, html_text, re.S)
+            return html.unescape(m.group(1)).strip().strip(',') if m else None
+        info = {
+            "username": self._username,
+            "uid": uid,
+            "credits": pick(r'积分\s*(?:</[^>]+>\s*)*([\d,]+)'),
+            "prestige": pick(r'威望\s*(?:</[^>]+>\s*)*([\d,]+)'),
+            "tickets": pick(r'车票\s*(?:</[^>]+>\s*)*([\d,]+)'),
+            "contribution": pick(r'贡献\s*(?:</[^>]+>\s*)*([\d,]+)'),
+            "reg_time": pick(r'注册时间</em>([^<]+)</li>') or pick(r'注册时间\s*([\d\-:\s]+)'),
+            "last_visit": pick(r'最后访问</em>([^<]+)</li>') or pick(r'最后访问\s*([\d\-:\s]+)'),
+        }
+        group_match = re.search(r'Lv\.[^<\s]+[^<]{0,20}', html_text)
+        info["user_group"] = html.unescape(group_match.group(0)).strip() if group_match else pick(r'用户组\s*(?:</[^>]+>\s*)*([^<\\n]+)')
+        return info
+
+    def _save_asset_point(self, user_info: Dict[str, Any]):
+        history = self.get_data(self._asset_history_key) or []
+        if not isinstance(history, list):
+            history = []
+        point = {
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "credits": user_info.get("credits") or 0,
+            "prestige": user_info.get("prestige") or 0,
+            "tickets": user_info.get("tickets") or 0,
+            "contribution": user_info.get("contribution") or 0,
+        }
+        history.append(point)
+        history = history[-30:]
+        self.save_data(self._asset_history_key, history)
+
+    def _refresh_user_info_requests(self, session: requests.Session, uid: Optional[str] = None):
+        uid = uid or self._extract_uid(session)
+        if not uid:
+            return None
+        resp = session.get(f"{self._base_url}/home.php?mod=space&uid={uid}", timeout=self._timeout)
+        resp.raise_for_status()
+        info = self._parse_user_info_html(resp.text, uid=uid)
+        self.save_data(self._user_info_key, info)
+        self._save_asset_point(info)
+        return info
+
+    def _refresh_user_info_fs(self, sid: str, uid: Optional[str] = None):
+        target_uid = uid or self._uid or '747026'
+        data = self._fs_get(sid, f"{self._base_url}/home.php?mod=space&uid={target_uid}")
+        sol = data.get("solution", {})
+        html_text = sol.get("response") or ""
+        if not uid:
+            uid = self._extract_uid_from_fs_cookies(sol.get("cookies") or []) or self._uid or '747026'
+        info = self._parse_user_info_html(html_text, uid=uid)
+        self.save_data(self._user_info_key, info)
+        self._save_asset_point(info)
+        return info
+
+    def _login_fs(self, sid: str) -> Tuple[bool, str]:
+        try:
+            data = self._fs_get(sid, f"{self._base_url}/member.php?mod=logging&action=login&infloat=yes&handlekey=login&inajax=1&ajaxtarget=fwin_content_login")
+            sol = data.get("solution", {})
+            html_text = sol.get("response") or ""
+            formhash = self._get_formhash(html_text)
+            loginhash = self._get_loginhash(html_text)
+            if not formhash:
+                return False, "无法获取 formhash"
+            if not loginhash:
+                return False, "无法获取 loginhash"
+            post_data = (
+                f"formhash={formhash}&referer={requests.utils.quote(self._base_url + '/', safe='')}&"
+                f"username={requests.utils.quote(self._username, safe='')}&password={self._md5(self._password)}&questionid=0&answer="
+            )
+            data = self._fs_post(sid, f"{self._base_url}/member.php?mod=logging&action=login&loginsubmit=yes&handlekey=login&loginhash={loginhash}&inajax=1", post_data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            cookies = data.get("solution", {}).get("cookies") or []
+            if any(c.get("name") == "SgL6_2132_auth" or "auth" in c.get("name", "").lower() for c in cookies):
+                return True, "登录成功"
+            return False, "登录失败，未获得 auth cookie"
+        except Exception as e:
+            return False, f"FlareSolverr 登录异常: {str(e)}"
+
+    def _signin_fs(self, sid: str) -> Tuple[bool, str]:
+        try:
+            self._fs_get(sid, f"{self._base_url}/k_misign-sign.html")
+            target_uid = self._uid or '747026'
+            data = self._fs_get(sid, f"{self._base_url}/home.php?mod=space&uid={target_uid}")
+            sol = data.get("solution", {})
+            html_text = sol.get("response") or ""
+            cookies = sol.get("cookies") or []
+            uid = self._extract_uid_from_fs_cookies(cookies) or self._uid or target_uid
+            if uid != target_uid:
+                data = self._fs_get(sid, f"{self._base_url}/home.php?mod=space&uid={uid}")
+                sol = data.get("solution", {})
+                html_text = sol.get("response") or html_text
+            formhash = self._get_formhash(html_text)
+            if not formhash:
+                return False, "无法获取签到 formhash"
+            data = self._fs_get(sid, f"{self._base_url}/plugin.php?id=k_misign:sign&operation=qiandao&formhash={formhash}&format=empty&inajax=1&ajaxtarget=JD_sign")
+            cookies = data.get("solution", {}).get("cookies") or []
+            if any("misigntime" in c.get("name", "").lower() for c in cookies):
+                return True, "签到完成"
+            resp = data.get("solution", {}).get("response") or ""
+            if "已签到" in resp:
+                return True, "今日已签到"
+            return True, "签到完成"
+        except Exception as e:
+            return False, f"FlareSolverr 签到异常: {str(e)}"
 
     def _login(self, session: requests.Session) -> Tuple[bool, str]:
         """登录并返回(是否成功, 消息)"""
@@ -612,19 +789,31 @@ class SijisheSignIn(_PluginBase):
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
             return result
 
-        session = self._session()
-        steps.append(f"🌐 已创建会话，代理：{self._proxy_url or '未配置'}")
+        session = None
+        fs_session = None
+        result['use_flaresolverr'] = self._use_flaresolverr
+        steps.append(f"🌐 代理：{self._proxy_url or '未配置'}")
         self._log_step(f"开始执行签到流程（{trigger_text}）")
 
         try:
+            if self._use_flaresolverr:
+                fs_session = self._fs_create_session()
+                steps.append(f"🛡️ 已创建 FlareSolverr 会话：{self._flaresolverr_url}")
+            else:
+                session = self._session()
+                steps.append("🌐 已创建 requests 会话")
+
             # 1. 登录
             steps.append('🔐 开始登录')
             self._log_step("开始登录")
-            login_success, login_msg = self._login(session)
+            if self._use_flaresolverr:
+                login_success, login_msg = self._login_fs(fs_session)
+            else:
+                login_success, login_msg = self._login(session)
             result['login_status'] = '成功' if login_success else '失败'
             steps.append(f"🔐 登录{'成功' if login_success else '失败'}: {login_msg}")
             self._log_step(f"登录{'成功' if login_success else '失败'}: {login_msg}")
-            
+
             if not login_success:
                 result.update({
                     'signin_status': '未执行',
@@ -640,20 +829,31 @@ class SijisheSignIn(_PluginBase):
             # 2. 签到
             steps.append('✍️ 开始签到')
             self._log_step("开始签到")
-            sign_success, sign_msg = self._signin(session)
+            if self._use_flaresolverr:
+                sign_success, sign_msg = self._signin_fs(fs_session)
+            else:
+                sign_success, sign_msg = self._signin(session)
             result['signin_status'] = '成功' if sign_success else '失败'
             steps.append(f"✍️ 签到{'成功' if sign_success else '失败'}: {sign_msg}")
             self._log_step(f"签到{'成功' if sign_success else '失败'}: {sign_msg}")
+
+            # 3. 用户信息
+            try:
+                info = self._refresh_user_info_fs(fs_session, uid=self._uid or None) if self._use_flaresolverr else self._refresh_user_info_requests(session, uid=self._uid or None)
+                if info:
+                    steps.append(f"👤 已刷新用户信息：积分 {info.get('credits') or '-'} / 威望 {info.get('prestige') or '-'} / 贡献 {info.get('contribution') or '-'}")
+            except Exception as info_error:
+                steps.append(f"⚠️ 用户信息刷新失败：{str(info_error)}")
 
             result.update({
                 'result_label': '成功' if sign_success else '失败',
                 'message': sign_msg,
                 'finished': True
             })
-            
+
             steps.append('✅ 执行完成')
             self._log_step("执行完成")
-            
+
         except Exception as e:
             steps.append(f"💥 执行失败：{str(e)}")
             self._log_step(f"执行失败：{str(e)}")
@@ -669,6 +869,8 @@ class SijisheSignIn(_PluginBase):
                 result['signin_status'] = '失败'
             logger.error(f"司机社签到自用执行失败：{str(e)}", exc_info=True)
 
+        if fs_session:
+            self._fs_destroy_session(fs_session)
         self._save_result(result)
         if self._notify:
             self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))

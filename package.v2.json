@@ -21,11 +21,12 @@
     "name": "司机签到自用",
     "description": "司机社(xsijishe.net)自动登录签到。基于真实 HAR 流量分析重构。",
     "labels": "签到,自动化,消息通知",
-    "version": "0.0.2",
+    "version": "0.0.5",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v0.0.5": "新增 FlareSolverr 模式（可配地址与代理），实测可通过 Cloudflare 完成登录与签到；新增可选 UID 配置项，在自动发现失败时可作为用户资料兜底；补充用户信息抓取与资产记录刷新。",
       "v0.0.2": "基于 HAR 流量分析重构：修正 Cookie 前缀，完善登录流程（先访问首页获取会话，再提取 formhash/loginhash 提交登录，优先检查 auth cookie 判断成功），签到流程改为从用户空间获取 formhash，新增 UID 自动提取。"
     }
   },
