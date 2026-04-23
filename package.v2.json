@@ -30,6 +30,18 @@
       "v1.0.0": "优化用户信息块版式并正式发布。"
     }
   },
+  "SijisheSignIn": {
+    "name": "司机签到自用",
+    "description": "用于司机社的自用签到插件，支持自动登录并完成每日签到。",
+    "labels": "签到,自动化,消息通知",
+    "version": "0.0.1",
+    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png",
+    "author": "Vivitoto",
+    "level": 1,
+    "history": {
+      "v0.0.1": "初始发布：司机签到自用插件，上线基础自动登录与签到能力。"
+    }
+  },
   "UgreenSignIn": {
     "name": "绿联论坛签到",
     "description": "通过Cookie自动访问绿联论坛，保持登录状态即完成签到",
