@@ -51,7 +51,7 @@ https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/package.v2.js
 
 **测试：**
 ```bash
-docker exec <moviepilot容器名> curl -I https://api.github.com/repos/Vivitoto/MoviePilot-Plugins/contents/plugins.v2/sijishe/__init__.py
+docker exec <moviepilot容器名> curl -I https://api.github.com/repos/Vivitoto/MoviePilot-Plugins/contents/plugins.v2/sijishesignin/__init__.py
 ```
 
 ### 4. MoviePilot 缓存了旧的 package.v2.json ⭐⭐
@@ -81,7 +81,7 @@ docker exec <moviepilot容器名> curl -I https://api.github.com/repos/Vivitoto/
 
 **步骤 3：容器内测试网络（如果方便）**
 ```bash
-docker exec <moviepilot容器名> curl -s https://api.github.com/repos/Vivitoto/MoviePilot-Plugins/contents/plugins.v2/sijishe/ | head -c 200
+docker exec <moviepilot容器名> curl -s https://api.github.com/repos/Vivitoto/MoviePilot-Plugins/contents/plugins.v2/sijishesignin/ | head -c 200
 ```
 
 **步骤 4：尝试手动安装**
@@ -90,7 +90,7 @@ docker exec <moviepilot容器名> curl -s https://api.github.com/repos/Vivitoto/
 # 进入 MoviePilot 容器或宿主机映射目录
 mkdir -p /path/to/moviepilot/app/plugins/sijishe
 curl -o /path/to/moviepilot/app/plugins/sijishe/__init__.py \
-  https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/plugins.v2/sijishe/__init__.py
+  https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/plugins.v2/sijishesignin/__init__.py
 # 然后重启 MoviePilot
 ```
 
