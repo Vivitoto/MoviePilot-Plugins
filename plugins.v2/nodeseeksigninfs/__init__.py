@@ -50,7 +50,7 @@ class NodeSeekSignInFS(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignfs.png"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -670,23 +670,42 @@ class NodeSeekSignInFS(_PluginBase):
                 logger.info("使用 FlareSolverr 发送请求")
                 sid = self._fs_create_session()
                 try:
-                    # 先 GET 过盾
-                    warm = self._fs_get(sid, "https://www.nodeseek.com/board", max_timeout=90000)
+                    # Step 1: GET 过盾，获取 cf_clearance
+                    warm = self._fs_get(sid, "https://www.nodeseek.com/board", max_timeout=120000)
                     sol = warm.get("solution", {})
-                    if sol.get("status") != 200:
-                        logger.warning(f"FlareSolverr 预热状态码: {sol.get('status')}")
-                    # 注入用户 Cookie
+                    warm_status = sol.get("status", 0)
+                    warm_text = sol.get("response", "")[:200]
+                    logger.info(f"FlareSolverr 预热状态: {warm_status}, 响应片段: {warm_text}")
+                    if warm_status != 200:
+                        logger.warning(f"FlareSolverr 预热状态码异常: {warm_status}")
+                    # 提取 cf_clearance
+                    cf_clearance = None
+                    for c in sol.get("cookies", []):
+                        if c.get("name") == "cf_clearance":
+                            cf_clearance = c.get("value")
+                            logger.info(f"FlareSolverr 获取到 cf_clearance: {cf_clearance[:20]}...")
+                            break
+                    # Step 2: 合并用户 Cookie 与 cf_clearance
+                    post_headers = dict(headers) if headers else {}
+                    cookie_parts = []
                     if self._cookie:
-                        cookie_header = headers.get("Cookie") if headers else ""
-                        post_headers = dict(headers) if headers else {}
-                        post_headers["Cookie"] = self._cookie
-                    else:
-                        post_headers = headers
-                    # POST 签到
-                    resp_data = self._fs_post(sid, url, post_data="", headers=post_headers, max_timeout=90000)
+                        cookie_parts.append(self._cookie.strip().rstrip(';'))
+                    if cf_clearance:
+                        cookie_parts.append(f"cf_clearance={cf_clearance}")
+                    merged_cookie = "; ".join(cookie_parts)
+                    if merged_cookie:
+                        post_headers["Cookie"] = merged_cookie
+                        logger.info(f"FlareSolverr 合并 Cookie 长度: {len(merged_cookie)}")
+                    # 确保 Content-Type 和 Content-Length 正确
+                    post_headers.setdefault("Content-Type", "application/json")
+                    post_headers.setdefault("Content-Length", "0")
+                    # Step 3: POST 签到
+                    resp_data = self._fs_post(sid, url, post_data="", headers=post_headers, max_timeout=120000)
                     sol = resp_data.get("solution", {})
                     resp_text = sol.get("response") or ""
                     resp_status = sol.get("status", 200)
+                    resp_ct = sol.get("headers", {}).get("Content-Type") or sol.get("headers", {}).get("content-type") or ""
+                    logger.info(f"FlareSolverr POST 状态: {resp_status}, Content-Type: {resp_ct}, 响应片段: {resp_text[:200]}")
                     # 构造类似 requests.Response 的对象
                     class FakeResp:
                         def __init__(self, text, status, headers_dict):
@@ -696,9 +715,11 @@ class NodeSeekSignInFS(_PluginBase):
                         def json(self):
                             import json as _json
                             return _json.loads(self.text)
-                    fake = FakeResp(resp_text, resp_status, {"Content-Type": "application/json"})
-                    ct = fake.headers.get('Content-Type') or ''
-                    if fake.status_code in (400, 403) or ('text/html' in ct.lower()):
+                    fake = FakeResp(resp_text, resp_status, {"Content-Type": resp_ct or "application/json"})
+                    # 只要返回了 JSON 内容（即使 success=false），也视为"拿到了响应"，交给上层解析
+                    if "application/json" in (resp_ct or "").lower() or resp_text.strip().startswith("{"):
+                        return fake
+                    if fake.status_code in (400, 403) or ('text/html' in (resp_ct or "").lower()):
                         logger.info("FlareSolverr 返回非预期，尝试 curl_cffi 回退")
                     else:
                         return fake
@@ -780,10 +801,12 @@ class NodeSeekSignInFS(_PluginBase):
                 logger.info("使用 FlareSolverr GET 请求")
                 sid = self._fs_create_session()
                 try:
-                    resp_data = self._fs_get(sid, url, max_timeout=90000)
+                    resp_data = self._fs_get(sid, url, max_timeout=120000)
                     sol = resp_data.get("solution", {})
                     resp_text = sol.get("response") or ""
                     resp_status = sol.get("status", 200)
+                    resp_ct = sol.get("headers", {}).get("Content-Type") or sol.get("headers", {}).get("content-type") or ""
+                    logger.info(f"FlareSolverr GET 状态: {resp_status}, Content-Type: {resp_ct}, 片段: {resp_text[:200]}")
                     class FakeResp:
                         def __init__(self, text, status, headers_dict):
                             self.text = text
@@ -792,9 +815,10 @@ class NodeSeekSignInFS(_PluginBase):
                         def json(self):
                             import json as _json
                             return _json.loads(self.text)
-                    fake = FakeResp(resp_text, resp_status, {"Content-Type": "text/html"})
-                    ct = fake.headers.get('Content-Type') or ''
-                    if fake.status_code in (400, 403) or ('text/html' in ct.lower() and 'Just a moment' in fake.text):
+                    fake = FakeResp(resp_text, resp_status, {"Content-Type": resp_ct or "text/html"})
+                    # 只要不是 CF 拦截页，就返回
+                    is_cf_page = 'Just a moment' in fake.text or 'Checking your browser' in fake.text
+                    if fake.status_code in (400, 403) or (is_cf_page and 'text/html' in (resp_ct or "").lower()):
                         logger.info("FlareSolverr GET 返回CF页，尝试 curl_cffi 回退")
                     else:
                         return fake
@@ -1373,344 +1397,131 @@ class NodeSeekSignInFS(_PluginBase):
         return []
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        # 状态提示移除CloudFlare相关文案
         curl_cffi_status = "✅ 已安装" if HAS_CURL_CFFI else "❌ 未安装"
         cloudscraper_status = "✅ 已启用" if HAS_CLOUDSCRAPER else "❌ 未启用"
+        
+        def sw(model, label):
+            return {'component': 'VSwitch', 'props': {'model': model, 'label': label}}
+        
+        def tf(model, label, placeholder='', type_str='text'):
+            return {'component': 'VTextField', 'props': {'model': model, 'label': label, 'placeholder': placeholder, 'type': type_str}}
         
         return [
             {
                 'component': 'VForm',
                 'content': [
+                    # === 基础设置 ===
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-3'},
                         'content': [
+                            {'component': 'VCardTitle', 'text': '⚙️ 基础设置'},
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enabled',
-                                            'label': '启用插件',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [sw('enabled', '启用插件')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [sw('notify', '开启通知')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [sw('onlyonce', '保存后执行一次')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [sw('random_choice', '随机奖励')]},
+                                        ]
+                                    },
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'notify',
-                                            'label': '开启通知',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'random_choice',
-                                            'label': '随机奖励',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'onlyonce',
-                                            'label': '立即运行一次',
-                                        }
-                                    }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VCronField', 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '0 8 * * *'}}]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [tf('cookie', '站点 Cookie', '从浏览器开发者工具复制 Cookie')]},
+                                        ]
+                                    },
                                 ]
                             }
                         ]
                     },
+                    # === CF 绕过设置 ===
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-3'},
                         'content': [
+                            {'component': 'VCardTitle', 'text': '🛡️ Cloudflare 绕过'},
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'use_proxy',
-                                            'label': '使用代理',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [sw('use_flaresolverr', '使用 FlareSolverr')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [sw('use_proxy', '使用系统代理')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [sw('verify_ssl', '验证 SSL 证书')]},
+                                        ]
+                                    },
                                     {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'use_flaresolverr',
-                                            'label': '使用FlareSolverr',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'verify_ssl',
-                                            'label': '验证SSL证书',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'clear_history',
-                                            'label': '清除历史记录',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'member_id',
-                                            'label': '成员ID（可选）',
-                                            'placeholder': '用于获取用户信息'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 3
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'flaresolverr_url',
-                                            'label': 'FlareSolverr地址',
-                                            'placeholder': 'http://127.0.0.1:8191/v1'
-                                        }
-                                    }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12}, 'content': [tf('flaresolverr_url', 'FlareSolverr 地址', 'http://127.0.0.1:8191/v1')]},
+                                        ]
+                                    },
                                 ]
                             }
                         ]
                     },
+                    # === 签到策略 ===
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-3'},
                         'content': [
+                            {'component': 'VCardTitle', 'text': '🎯 签到策略'},
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'min_delay',
-                                            'label': '最小随机延迟(秒)',
-                                            'type': 'number',
-                                            'placeholder': '5'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 6
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'max_delay',
-                                            'label': '最大随机延迟(秒)',
-                                            'type': 'number',
-                                            'placeholder': '12'
-                                        }
-                                    }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('min_delay', '最小随机延迟（秒）', '5', 'number')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('max_delay', '最大随机延迟（秒）', '12', 'number')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('max_retries', '失败重试次数', '3', 'number')]},
+                                        ]
+                                    },
                                 ]
                             }
                         ]
                     },
+                    # === 用户与数据 ===
                     {
-                        'component': 'VRow',
+                        'component': 'VCard',
+                        'props': {'variant': 'flat', 'class': 'mb-3'},
                         'content': [
+                            {'component': 'VCardTitle', 'text': '👤 用户与数据'},
                             {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
+                                'component': 'VCardText',
                                 'content': [
                                     {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cookie',
-                                            'label': '站点Cookie',
-                                            'placeholder': '请输入站点Cookie值'
-                                        }
-                                    }
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('member_id', '成员 ID（可选）', '用于获取用户信息')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('history_days', '历史保留天数', '30', 'number')]},
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [tf('stats_days', '收益统计天数', '30', 'number')]},
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [sw('clear_history', '⚠️ 清除历史记录')]},
+                                        ]
+                                    },
                                 ]
                             }
                         ]
                     },
+                    # === 说明 ===
                     {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VCronField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '签到周期'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'history_days',
-                                            'label': '历史保留天数',
-                                            'type': 'number',
-                                            'placeholder': '30'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'max_retries',
-                                            'label': '失败重试次数',
-                                            'type': 'number',
-                                            'placeholder': '3'
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'stats_days',
-                                            'label': '收益统计天数',
-                                            'type': 'number',
-                                            'placeholder': '30'
-                                        }
-                                    }
-                                ]
-                            },
-
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': f'【使用教程】\n1. 登录NodeSeek论坛网站，按F12打开开发者工具\n2. 在"网络"或"应用"选项卡中复制Cookie\n3. 粘贴Cookie到上方输入框\n4. 设置签到时间，建议早上8点(0 8 * * *)\n5. 启用插件并保存\n\n【功能说明】\n• 随机奖励：开启则使用随机奖励，关闭则使用固定奖励\n• 使用代理：开启则使用系统配置的代理服务器访问NodeSeek\n• 验证SSL证书：关闭可能解决SSL连接问题，但会降低安全性\n• 失败重试：设置签到失败后的最大重试次数，将在5-15分钟后随机重试\n• 随机延迟：请求前随机等待，降低被风控概率\n• 用户信息：配置成员ID后，通知中展示用户名/等级/鸡腿\n• 立即运行一次：手动触发一次签到\n• 清除历史记录：勾选后保存配置，插件将清空所有签到历史、用户信息等数据，使用后会自动关闭\n\n【环境状态】\n• curl_cffi: {curl_cffi_status}；cloudscraper: {cloudscraper_status}'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
+                        'component': 'VAlert',
+                        'props': {
+                            'type': 'info',
+                            'variant': 'tonal',
+                            'text': f'【使用教程】\n1. 登录 NodeSeek 论坛，按 F12 复制 Cookie\n2. 粘贴 Cookie 到上方输入框\n3. 开启 FlareSolverr（推荐）并填写地址\n4. 设置签到时间，建议早上 8 点 (0 8 * * *)\n5. 启用插件并保存\n\n【环境状态】curl_cffi: {curl_cffi_status}；cloudscraper: {cloudscraper_status}'
+                        }
                     }
                 ]
             }
@@ -1729,9 +1540,10 @@ class NodeSeekSignInFS(_PluginBase):
             "max_delay": 12,
             "member_id": "",
             "clear_history": False,
-            "stats_days": 30
+            "stats_days": 30,
+            "use_flaresolverr": False,
+            "flaresolverr_url": "http://127.0.0.1:8191/v1"
         }
-
     def get_page(self) -> List[dict]:
         """
         构建插件详情页面，展示签到历史
