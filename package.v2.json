@@ -31,34 +31,5 @@
       "v0.0.5": "新增 FlareSolverr 模式（可配地址与代理），实测可通过 Cloudflare 完成登录与签到；新增可选 UID 配置项，在自动发现失败时可作为用户资料兜底；补充用户信息抓取与资产记录刷新。",
       "v0.0.2": "基于 HAR 流量分析重构：修正 Cookie 前缀，完善登录流程（先访问首页获取会话，再提取 formhash/loginhash 提交登录，优先检查 auth cookie 判断成功），签到流程改为从用户空间获取 formhash，新增 UID 自动提取。"
     }
-  },
-  "NodeSeekSignInFS": {
-    "name": "NodeSeek论坛签到FS",
-    "description": "自动完成NodeSeek论坛每日签到，支持FlareSolverr绕过Cloudflare防护。",
-    "labels": "签到,自动化,消息通知",
-    "version": "1.0.2",
-    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignfs.png",
-    "author": "Vivitoto",
-    "level": 2,
-    "history": {
-      "v1.0.2": "修复 FlareSolverr POST 被转成 GET 的问题：改为在 _run_api_sign 里先让 FlareSolverr GET 过盾获取 cf_clearance，再用 curl_cffi 发 POST 签到，避免 FlareSolverr 的 request.post 退化。",
-      "v1.0.1": "修复 FlareSolverr Cookie 合并逻辑：预热 GET 获取 cf_clearance 后，与用户 Cookie 合并再 POST，避免覆盖导致 wrong page；延长超时到 120 秒；优化配置页排版为分组卡片式。",
-      "v1.0.0": "基于 madrays NodeSeek 插件改造，新增 FlareSolverr 模式优先层，用于绕过 NodeSeek 的 Cloudflare Managed Challenge。"
-    }
-  },
-  "UgreenSignIn": {
-    "name": "绿联论坛签到",
-    "description": "通过Cookie自动访问绿联论坛，保持登录状态即完成签到",
-    "labels": "签到,自动化,消息通知",
-    "version": "0.1.0",
-    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/ugreensignin.png",
-    "author": "Vivitoto",
-    "level": 2,
-    "history": {
-      "v0.1.0": "重写插件：纯Cookie模式，修复用户信息解析，新增User-Agent配置",
-      "v0.0.7": "添加手动UID配置项，填后跳过自动发现。",
-      "v0.0.6": "图标放大约10%（256→282）。",
-      "v0.0.5": "初始版本。"
-    }
   }
 }
