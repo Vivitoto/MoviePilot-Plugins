@@ -50,7 +50,7 @@ class NodeSeekSignInFS(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignfs.png"
     # 插件版本
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -439,6 +439,41 @@ class NodeSeekSignInFS(_PluginBase):
         """
         try:
             result = {"success": False, "signed": False, "already_signed": False, "message": ""}
+            random_param = "true" if self._random_choice else "false"
+            url = f"https://www.nodeseek.com/api/attendance?random={random_param}"
+            proxies = self._get_proxies()
+
+            # 如果启用 FlareSolverr，先过盾获取 cf_clearance，再用 curl_cffi POST
+            merged_cookie = self._cookie
+            if self._use_flaresolverr:
+                try:
+                    logger.info("FlareSolverr 模式：先预热获取 cf_clearance")
+                    sid = self._fs_create_session()
+                    try:
+                        warm = self._fs_get(sid, "https://www.nodeseek.com/board", max_timeout=120000)
+                        sol = warm.get("solution", {})
+                        warm_status = sol.get("status", 0)
+                        logger.info(f"FlareSolverr 预热状态: {warm_status}")
+                        # 提取 cf_clearance
+                        cf_clearance = None
+                        for c in sol.get("cookies", []):
+                            if c.get("name") == "cf_clearance":
+                                cf_clearance = c.get("value")
+                                logger.info(f"FlareSolverr 获取到 cf_clearance: {cf_clearance[:20]}...")
+                                break
+                        if cf_clearance:
+                            # 合并用户 Cookie 与 cf_clearance
+                            parts = [self._cookie.strip().rstrip(';')] if self._cookie else []
+                            parts.append(f"cf_clearance={cf_clearance}")
+                            merged_cookie = "; ".join(parts)
+                            logger.info(f"合并后 Cookie 长度: {len(merged_cookie)}")
+                        else:
+                            logger.warning("FlareSolverr 预热未获取到 cf_clearance")
+                    finally:
+                        self._fs_destroy_session(sid)
+                except Exception as e:
+                    logger.warning(f"FlareSolverr 预热失败，将继续使用原始 Cookie: {str(e)}")
+
             headers = {
                 'Accept': '*/*',
                 'Accept-Encoding': 'gzip, deflate, br, zstd',
@@ -454,11 +489,8 @@ class NodeSeekSignInFS(_PluginBase):
                 'Sec-Fetch-Mode': 'cors',
                 'Sec-Fetch-Site': 'same-origin',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-                'Cookie': self._cookie
+                'Cookie': merged_cookie
             }
-            random_param = "true" if self._random_choice else "false"
-            url = f"https://www.nodeseek.com/api/attendance?random={random_param}"
-            proxies = self._get_proxies()
             response = self._smart_post(url=url, headers=headers, data=b'', proxies=proxies, timeout=30)
             try:
                 logger.info(f"签到响应状态码: {response.status_code}")
@@ -663,71 +695,6 @@ class NodeSeekSignInFS(_PluginBase):
         4) requests
         """
         last_error = None
-
-        # 0) FlareSolverr 优先
-        if self._use_flaresolverr:
-            try:
-                logger.info("使用 FlareSolverr 发送请求")
-                sid = self._fs_create_session()
-                try:
-                    # Step 1: GET 过盾，获取 cf_clearance
-                    warm = self._fs_get(sid, "https://www.nodeseek.com/board", max_timeout=120000)
-                    sol = warm.get("solution", {})
-                    warm_status = sol.get("status", 0)
-                    warm_text = sol.get("response", "")[:200]
-                    logger.info(f"FlareSolverr 预热状态: {warm_status}, 响应片段: {warm_text}")
-                    if warm_status != 200:
-                        logger.warning(f"FlareSolverr 预热状态码异常: {warm_status}")
-                    # 提取 cf_clearance
-                    cf_clearance = None
-                    for c in sol.get("cookies", []):
-                        if c.get("name") == "cf_clearance":
-                            cf_clearance = c.get("value")
-                            logger.info(f"FlareSolverr 获取到 cf_clearance: {cf_clearance[:20]}...")
-                            break
-                    # Step 2: 合并用户 Cookie 与 cf_clearance
-                    post_headers = dict(headers) if headers else {}
-                    cookie_parts = []
-                    if self._cookie:
-                        cookie_parts.append(self._cookie.strip().rstrip(';'))
-                    if cf_clearance:
-                        cookie_parts.append(f"cf_clearance={cf_clearance}")
-                    merged_cookie = "; ".join(cookie_parts)
-                    if merged_cookie:
-                        post_headers["Cookie"] = merged_cookie
-                        logger.info(f"FlareSolverr 合并 Cookie 长度: {len(merged_cookie)}")
-                    # 确保 Content-Type 和 Content-Length 正确
-                    post_headers.setdefault("Content-Type", "application/json")
-                    post_headers.setdefault("Content-Length", "0")
-                    # Step 3: POST 签到
-                    resp_data = self._fs_post(sid, url, post_data="", headers=post_headers, max_timeout=120000)
-                    sol = resp_data.get("solution", {})
-                    resp_text = sol.get("response") or ""
-                    resp_status = sol.get("status", 200)
-                    resp_ct = sol.get("headers", {}).get("Content-Type") or sol.get("headers", {}).get("content-type") or ""
-                    logger.info(f"FlareSolverr POST 状态: {resp_status}, Content-Type: {resp_ct}, 响应片段: {resp_text[:200]}")
-                    # 构造类似 requests.Response 的对象
-                    class FakeResp:
-                        def __init__(self, text, status, headers_dict):
-                            self.text = text
-                            self.status_code = status
-                            self.headers = headers_dict
-                        def json(self):
-                            import json as _json
-                            return _json.loads(self.text)
-                    fake = FakeResp(resp_text, resp_status, {"Content-Type": resp_ct or "application/json"})
-                    # 只要返回了 JSON 内容（即使 success=false），也视为"拿到了响应"，交给上层解析
-                    if "application/json" in (resp_ct or "").lower() or resp_text.strip().startswith("{"):
-                        return fake
-                    if fake.status_code in (400, 403) or ('text/html' in (resp_ct or "").lower()):
-                        logger.info("FlareSolverr 返回非预期，尝试 curl_cffi 回退")
-                    else:
-                        return fake
-                finally:
-                    self._fs_destroy_session(sid)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"FlareSolverr 请求失败，将回退：{str(e)}")
 
         # 1) curl_cffi 优先
         if HAS_CURL_CFFI:

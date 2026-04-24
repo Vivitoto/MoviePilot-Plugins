@@ -36,11 +36,12 @@
     "name": "NodeSeek论坛签到FS",
     "description": "自动完成NodeSeek论坛每日签到，支持FlareSolverr绕过Cloudflare防护。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignfs.png",
     "author": "Vivitoto",
     "level": 2,
     "history": {
+      "v1.0.2": "修复 FlareSolverr POST 被转成 GET 的问题：改为在 _run_api_sign 里先让 FlareSolverr GET 过盾获取 cf_clearance，再用 curl_cffi 发 POST 签到，避免 FlareSolverr 的 request.post 退化。",
       "v1.0.1": "修复 FlareSolverr Cookie 合并逻辑：预热 GET 获取 cf_clearance 后，与用户 Cookie 合并再 POST，避免覆盖导致 wrong page；延长超时到 120 秒；优化配置页排版为分组卡片式。",
       "v1.0.0": "基于 madrays NodeSeek 插件改造，新增 FlareSolverr 模式优先层，用于绕过 NodeSeek 的 Cloudflare Managed Challenge。"
     }
