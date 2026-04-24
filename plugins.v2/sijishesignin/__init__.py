@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "0.0.9"
+    plugin_version = "1.0.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -614,6 +614,15 @@ class SijisheSignIn(_PluginBase):
         self._log_step(f"用户信息已刷新：积分={info.get('credits') or '-'} 威望={info.get('prestige') or '-'} 贡献={info.get('contribution') or '-'}")
         return info
 
+    def _parse_num(self, val) -> Optional[int]:
+        """把带逗号的数字字符串转成 int"""
+        if val is None:
+            return None
+        try:
+            return int(str(val).replace(",", "").strip())
+        except (ValueError, TypeError):
+            return None
+
     def _extract_reward(self, text: str) -> Optional[str]:
         """从签到响应文本中提取奖励信息"""
         if not text:
@@ -936,6 +945,14 @@ class SijisheSignIn(_PluginBase):
                     self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
                 return result
 
+            # 1.5 签到前资产快照（用于后续对比算奖励）
+            pre_info = None
+            try:
+                pre_info = self._refresh_user_info_fs(fs_session, uid=self._uid or None) if self._use_flaresolverr else self._refresh_user_info_requests(session, uid=self._uid or None)
+                self._log_step(f"签到前资产快照：积分 {pre_info.get('credits') or '-'} / 威望 {pre_info.get('prestige') or '-'} / 车票 {pre_info.get('tickets') or '-'} / 贡献 {pre_info.get('contribution') or '-'}")
+            except Exception as e:
+                self._log_step(f"签到前资产快照失败：{str(e)}")
+
             # 2. 签到
             steps.append('✍️ 开始签到')
             self._log_step("开始签到")
@@ -956,6 +973,19 @@ class SijisheSignIn(_PluginBase):
                 info = self._refresh_user_info_fs(fs_session, uid=self._uid or None) if self._use_flaresolverr else self._refresh_user_info_requests(session, uid=self._uid or None)
                 if info:
                     steps.append(f"👤 已刷新用户信息：积分 {info.get('credits') or '-'} / 威望 {info.get('prestige') or '-'} / 贡献 {info.get('contribution') or '-'}")
+                    # 资产对比：如果文本提取没拿到奖励，用前后差额兜底
+                    if pre_info and not reward:
+                        deltas = []
+                        for field, label in [("credits", "积分"), ("prestige", "威望"), ("tickets", "车票"), ("contribution", "贡献")]:
+                            pre = self._parse_num(pre_info.get(field))
+                            post = self._parse_num(info.get(field))
+                            if pre is not None and post is not None and post > pre:
+                                deltas.append(f"{label} +{post - pre}")
+                        if deltas:
+                            reward = "，".join(deltas)
+                            result['reward'] = reward
+                            steps.append(f"🎁 签到奖励（资产对比）：{reward}")
+                            self._log_step(f"签到奖励（资产对比）：{reward}")
             except Exception as info_error:
                 steps.append(f"⚠️ 用户信息刷新失败：{str(info_error)}")
 
