@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe.png"
-    plugin_version = "0.0.7"
+    plugin_version = "0.0.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -624,9 +624,12 @@ class SijisheSignIn(_PluginBase):
             r'奖励[：:]\s*([^<\n]{1,30})',
             r'签到成功[，,]\s*([^<\n]{1,40})',
             r'恭喜[^<\n]{0,20}获得\s*([^<\n]{1,30})',
-            r'积分\s*\+\s*(\d+)',
-            r'威望\s*\+\s*(\d+)',
-            r'车票\s*\+\s*(\d+)',
+            r'积分\s*[\+:]\s*(\d+)',
+            r'威望\s*[\+:]\s*(\d+)',
+            r'车票\s*[\+:]\s*(\d+)',
+            r'积分\s*(\d+)',
+            r'威望\s*(\d+)',
+            r'车票\s*(\d+)',
         ]
         for p in patterns:
             m = re.search(p, text)
@@ -636,6 +639,20 @@ class SijisheSignIn(_PluginBase):
                     field = "积分" if "积分" in p else ("威望" if "威望" in p else "车票")
                     reward = f"{field} +{reward}"
                 return reward if len(reward) < 50 else reward[:50]
+        # 兜底：直接找 +数字 形式
+        m = re.search(r'[\+＋](\d+)', text)
+        if m:
+            num = m.group(1)
+            # 看前后文确定字段
+            idx = m.start()
+            ctx = text[max(0, idx-20):idx+20]
+            field = "积分"
+            if "车票" in ctx or "車票" in ctx:
+                field = "车票"
+            elif "威望" in ctx:
+                field = "威望"
+            return f"{field} +{num}"
+        self._log_step(f"奖励提取失败，原始文本片段：{text[:200].replace(chr(10),' ').replace(chr(13),' ')}")
         return None
 
     def _refresh_user_info_fs(self, sid: str, uid: Optional[str] = None):
@@ -824,24 +841,18 @@ class SijisheSignIn(_PluginBase):
 
             # 以文本判据优先
             if any(k in resp.text for k in ["今日已签到", "已经签到", "已完成签到", "请勿重复签到", "重复签到"]):
-                return True, "今日已签到", None
+                return True, "今日已签到" + (f"：{reward}" if reward else ""), reward
             if "非法字符" in resp.text or "已经被系统拒绝" in resp.text:
-                return True, "今日已签到（非法字符：重复请求）", None
+                return True, "今日已签到（非法字符：重复请求）" + (f"：{reward}" if reward else ""), reward
             if "签到成功" in resp.text:
-                if reward:
-                    return True, f"签到成功：{reward}", reward
-                return True, "签到成功", None
+                return True, f"签到成功：{reward}" if reward else "签到成功", reward
 
             # cookie 兜底判据
             if any("misigntime" in c.name.lower() for c in session.cookies):
-                if reward:
-                    return True, f"签到成功：{reward}", reward
-                return True, "签到完成", None
+                return True, f"签到完成：{reward}" if reward else "签到完成", reward
 
             if resp.status_code == 200:
-                if reward:
-                    return True, f"签到完成：{reward}", reward
-                return True, "签到完成", None
+                return True, f"签到完成：{reward}" if reward else "签到完成", reward
             else:
                 return False, f"签到响应异常: {resp.text[:200]}", None
 
