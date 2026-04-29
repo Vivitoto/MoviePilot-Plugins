@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -319,12 +319,15 @@ class SijisheSignIn(_PluginBase):
             ]
         }]
 
-        # 资产趋势图
+        # 资产趋势图：按天聚合展示，兼容旧版 date(含时分秒) 记录
+        def _asset_day(item: Dict[str, Any]) -> str:
+            return str(item.get('day') or item.get('date') or '')[:10]
+
         if asset_history and len(asset_history) >= 2:
-            asset_history = sorted(asset_history, key=lambda x: x.get('date', ''))[-30:]
-            dates = [item.get('date', '') for item in asset_history]
-            credits_data = [item.get('credits', 0) for item in asset_history]
-            tickets_data = [item.get('tickets', 0) for item in asset_history]
+            asset_history = sorted(asset_history, key=_asset_day)[-30:]
+            dates = [_asset_day(item) for item in asset_history]
+            credits_data = [self._parse_num(item.get('credits')) or 0 for item in asset_history]
+            tickets_data = [self._parse_num(item.get('tickets')) or 0 for item in asset_history]
             page.append({
                 'component': 'VCard',
                 'props': {'variant': 'flat', 'class': 'mb-3'},
@@ -590,19 +593,25 @@ class SijisheSignIn(_PluginBase):
         return info
 
     def _save_asset_point(self, user_info: Dict[str, Any]):
+        today = datetime.now().strftime("%Y-%m-%d")
+        point = {
+            "day": today,
+            "credits": self._parse_num(user_info.get("credits")) or 0,
+            "prestige": self._parse_num(user_info.get("prestige")) or 0,
+            "tickets": self._parse_num(user_info.get("tickets")) or 0,
+            "contribution": self._parse_num(user_info.get("contribution")) or 0,
+        }
         history = self.get_data(self._asset_history_key) or []
         if not isinstance(history, list):
             history = []
-        point = {
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "credits": user_info.get("credits") or 0,
-            "prestige": user_info.get("prestige") or 0,
-            "tickets": user_info.get("tickets") or 0,
-            "contribution": user_info.get("contribution") or 0,
-        }
+
+        def _item_day(item: Dict[str, Any]) -> str:
+            return str(item.get("day") or item.get("date") or "")[:10]
+
+        history = [item for item in history if _item_day(item) != today]
         history.append(point)
-        history = history[-30:]
-        self.save_data(self._asset_history_key, history)
+        history = sorted(history, key=_item_day, reverse=True)[:30]
+        self.save_data(self._asset_history_key, list(reversed(history)))
 
     def _refresh_user_info_requests(self, session: requests.Session, uid: Optional[str] = None):
         uid = uid or self._extract_uid(session) or self._uid
