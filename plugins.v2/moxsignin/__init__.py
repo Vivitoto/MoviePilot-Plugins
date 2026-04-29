@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -282,59 +282,79 @@ class MoxSignIn(_PluginBase):
         last_login = member_status.get('上次登录', '-')
         credits = member_status.get('积分', '-')
 
-        user_cards = [
-            ('👤 用户名', username),
-            ('🆔 用户ID', str(user_id_value)),
-            ('🏷️ 用户组', group_name),
-            ('📅 注册时间', register_at),
-            ('🕘 上次登录', last_login),
-        ]
-        level_cards = [
-            ('⭐ 积分', str(credits)),
-            ('🎖️ 积分等级', level_name),
-        ]
-        currency_cards = [
-            ('🪙 软妹币', str(assets.get('软妹币', '-'))),
-            ('💵 交易魔币', str(assets.get('交易魔币', '-'))),
-            ('💰 绑定魔币', str(assets.get('绑定魔币', '-'))),
-        ]
-
-        def _info_card(title: str, value: str, color: str, cols: Dict[str, int] = None) -> Dict[str, Any]:
-            props = {'cols': 12, 'sm': 6, 'md': 4}
+        def _metric_card(label: str, value: str, color: str, cols: Dict[str, int] = None) -> Dict[str, Any]:
+            props = {'cols': 6, 'sm': 4, 'md': 2}
             if cols:
                 props.update(cols)
+            color_map = {
+                'primary': ('rgba(25,118,210,.08)', 'rgba(25,118,210,.22)', '#1565C0'),
+                'secondary': ('rgba(123,31,162,.08)', 'rgba(123,31,162,.22)', '#6A1B9A'),
+                'warning': ('rgba(245,124,0,.10)', 'rgba(245,124,0,.24)', '#E65100'),
+                'success': ('rgba(46,125,50,.08)', 'rgba(46,125,50,.22)', '#2E7D32'),
+            }
+            bg, border, text_color = color_map.get(color, color_map['primary'])
             return {
                 'component': 'VCol',
                 'props': props,
                 'content': [{
-                    'component': 'VCard',
-                    'props': {'variant': 'tonal', 'color': color, 'class': 'h-100'},
+                    'component': 'div',
+                    'props': {'style': f'background:{bg};border:1px solid {border};border-radius:10px;padding:7px 10px;min-height:54px;'},
                     'content': [
-                        {'component': 'VCardText', 'props': {'class': 'py-3 px-4'}, 'content': [
-                            {'component': 'div', 'props': {'class': 'text-caption mb-1'}, 'text': title},
-                            {'component': 'div', 'props': {'class': 'text-body-1 font-weight-bold'}, 'text': value or '-'}
-                        ]}
+                        {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': label},
+                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold text-truncate', 'style': f'color:{text_color};'}, 'text': value or '-'}
                     ]
                 }]
             }
+
+        def _meta_chip(label: str, value: str) -> Dict[str, Any]:
+            return {
+                'component': 'div',
+                'props': {'class': 'text-caption', 'style': 'background:rgba(0,0,0,.04);border-radius:999px;padding:3px 9px;'},
+                'text': f'{label}：{value or "-"}'
+            }
+
+        def _chip(text: str, color: str) -> Dict[str, Any]:
+            return {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': color}, 'text': text or '-'}
+
+        def _status_chip(text: Any) -> Dict[str, Any]:
+            value = str(text or '-')
+            if '失败' in value:
+                return _chip(value, 'error')
+            if '未' in value or value == '否':
+                return _chip(value, 'warning')
+            if '已签到' in value:
+                return _chip(value, 'info')
+            if '成功' in value or value == '是':
+                return _chip(value, 'success')
+            return _chip(value, 'primary')
+
+        def _source_chip(text: Any) -> Dict[str, Any]:
+            value = str(text or '-')
+            return _chip(value, 'info' if '自动' in value else 'warning')
 
         page = [{
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
-                {'component': 'VCardTitle', 'text': '👤 用户信息'},
-                {'component': 'VCardText', 'props': {'class': 'pt-2 pb-2'}, 'content': [
-                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2'}, 'text': '基础资料'},
+                {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                    {'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-2'}, 'content': [
+                        {'component': 'div', 'content': [
+                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': username},
+                            {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'ID：{user_id_value}'}
+                        ]},
+                        {'component': 'VChip', 'props': {'size': 'small', 'variant': 'tonal', 'color': 'primary'}, 'text': group_name}
+                    ]},
                     {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-1'}, 'content': [
-                        _info_card(t, v, 'primary', {'md': 4, 'sm': 6}) for t, v in user_cards
+                        _metric_card('积分', str(credits), 'primary'),
+                        _metric_card('等级', level_name, 'secondary'),
+                        _metric_card('软妹币', str(assets.get('软妹币', '-')), 'warning'),
+                        _metric_card('交易魔币', str(assets.get('交易魔币', '-')), 'warning'),
+                        _metric_card('绑定魔币', str(assets.get('绑定魔币', '-')), 'success'),
                     ]},
-                    {'component': 'div', 'props': {'class': 'text-subtitle-2 mb-2 mt-2'}, 'text': '积分与资产'},
-                    {'component': 'VRow', 'props': {'dense': True, 'class': 'mb-1'}, 'content': [
-                        _info_card(t, v, 'secondary', {'md': 6, 'sm': 6}) for t, v in level_cards
-                    ]},
-                    {'component': 'VRow', 'props': {'dense': True}, 'content': [
-                        _info_card(t, v, 'warning', {'md': 4, 'sm': 4}) for t, v in currency_cards
-                    ]},
+                    {'component': 'div', 'props': {'class': 'd-flex flex-wrap ga-2 mt-2'}, 'content': [
+                        _meta_chip('注册', register_at),
+                        _meta_chip('上次登录', last_login),
+                    ]}
                 ]}
             ]
         }]
@@ -342,6 +362,7 @@ class MoxSignIn(_PluginBase):
         chart_card = self._asset_chart_card(asset_history)
         if chart_card:
             chart_card['props']['class'] = 'mb-3'
+            chart_card['content'][0]['props'] = {'class': 'text-subtitle-1 py-2'}
             chart_card['content'][0]['text'] = '📈 资产趋势图'
             if chart_card.get('content') and len(chart_card['content']) > 1:
                 chart_card['content'][1]['props']['height'] = 220
@@ -351,7 +372,7 @@ class MoxSignIn(_PluginBase):
             'component': 'VCard',
             'props': {'variant': 'flat', 'class': 'mb-3'},
             'content': [
-                {'component': 'VCardTitle', 'text': f'🗂️ 执行记录（共 {len(history)} 条）'},
+                {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': f'🗂️ 执行记录（共 {len(history)} 条）'},
                 {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
                     {'component': 'thead', 'content': [{
                         'component': 'tr', 'content': [
@@ -366,11 +387,11 @@ class MoxSignIn(_PluginBase):
                     {'component': 'tbody', 'content': [{
                         'component': 'tr', 'content': [
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('executed_at', '-')},
-                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('source_text') or self._source_text(item.get('source'))},
-                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('login_status', '-')},
-                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('signin_status', '-')},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_source_chip(item.get('source_text') or self._source_text(item.get('source')))]},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_status_chip(item.get('login_status', '-'))]},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_status_chip(item.get('signin_status', '-'))]},
                             {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('reward_text', '-')},
-                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': '是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否'},
+                            {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_status_chip('是' if (item.get('finished') or item.get('signin_status') == '今日已签到') else '否')]},
                         ]
                     } for item in history[:30]]}
                 ]}

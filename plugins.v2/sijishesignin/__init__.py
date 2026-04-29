@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -244,140 +244,144 @@ class SijisheSignIn(_PluginBase):
         history = self.get_data(self._history_key) or []
         user_info = self.get_data(self._user_info_key) or {}
         asset_history = self.get_data(self._asset_history_key) or []
-        
         if not history and not user_info:
             return [{'component': 'div', 'text': '暂无数据', 'props': {'class': 'text-center'}}]
 
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True) if history else []
-        
-        # 构建页面组件列表
-        components = []
-        
-        # 1. 用户信息卡片
-        if user_info:
-            username = user_info.get('username', self._username or '未知用户')
-            user_group = user_info.get('user_group', '-')
-            credits = user_info.get('credits', '-')
-            prestige = user_info.get('prestige', '-')
-            tickets = user_info.get('tickets', '-')
-            contribution = user_info.get('contribution', '-')
-            reg_time = user_info.get('reg_time', '-')
-            
-            components.append({
-                'component': 'VCard',
-                'props': {'variant': 'flat', 'class': 'mb-3'},
-                'content': [
-                    {'component': 'VCardTitle', 'text': f'👤 用户信息：{username}'},
-                    {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [
-                        {'component': 'VRow', 'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '用户组：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium'}, 'text': str(user_group)}
-                                ]}
-                            ]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '积分：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium text-primary'}, 'text': str(credits)}
-                                ]}
-                            ]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '威望：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium'}, 'text': str(prestige)}
-                                ]}
-                            ]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '车票：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium text-success'}, 'text': str(tickets)}
-                                ]}
-                            ]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '贡献：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium'}, 'text': str(contribution)}
-                                ]}
-                            ]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'sm': 6}, 'content': [
-                                {'component': 'div', 'props': {'class': 'text-body-2'}, 'content': [
-                                    {'component': 'span', 'props': {'class': 'text-medium-emphasis'}, 'text': '注册时间：'},
-                                    {'component': 'span', 'props': {'class': 'font-weight-medium'}, 'text': str(reg_time)}
-                                ]}
-                            ]},
-                        ]}
+        username = user_info.get('username', self._username or '未知用户')
+        user_group = user_info.get('user_group', '-')
+        credits = user_info.get('credits', '-')
+        prestige = user_info.get('prestige', '-')
+        tickets = user_info.get('tickets', '-')
+        contribution = user_info.get('contribution', '-')
+        reg_time = user_info.get('reg_time', '-')
+
+        def _metric_card(label: str, value: str, color: str, cols: Dict[str, int] = None) -> Dict[str, Any]:
+            props = {'cols': 6, 'sm': 3, 'md': 3}
+            if cols:
+                props.update(cols)
+            color_map = {
+                'primary': ('rgba(25,118,210,.08)', 'rgba(25,118,210,.22)', '#1565C0'),
+                'secondary': ('rgba(123,31,162,.08)', 'rgba(123,31,162,.22)', '#6A1B9A'),
+                'warning': ('rgba(245,124,0,.10)', 'rgba(245,124,0,.24)', '#E65100'),
+                'success': ('rgba(46,125,50,.08)', 'rgba(46,125,50,.22)', '#2E7D32'),
+            }
+            bg, border, text_color = color_map.get(color, color_map['primary'])
+            return {
+                'component': 'VCol',
+                'props': props,
+                'content': [{
+                    'component': 'div',
+                    'props': {'style': f'background:{bg};border:1px solid {border};border-radius:10px;padding:7px 10px;min-height:54px;'},
+                    'content': [
+                        {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': label},
+                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold text-truncate', 'style': f'color:{text_color};'}, 'text': value or '-'}
+                    ]
+                }]
+            }
+
+        def _chip(text: str, color: str) -> Dict[str, Any]:
+            return {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': color}, 'text': text or '-'}
+
+        def _status_chip(text: Any) -> Dict[str, Any]:
+            value = str(text or '-')
+            if '失败' in value:
+                return _chip(value, 'error')
+            if '未' in value:
+                return _chip(value, 'warning')
+            if '成功' in value:
+                return _chip(value, 'success')
+            return _chip(value, 'primary')
+
+        def _source_chip(text: Any) -> Dict[str, Any]:
+            value = str(text or '-')
+            return _chip(value, 'info' if '自动' in value else 'warning')
+
+        page = [{
+            'component': 'VCard',
+            'props': {'variant': 'flat', 'class': 'mb-3'},
+            'content': [
+                {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                    {'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-2'}, 'content': [
+                        {'component': 'div', 'content': [
+                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': username},
+                            {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'注册：{reg_time}'}
+                        ]},
+                        {'component': 'VChip', 'props': {'size': 'small', 'variant': 'tonal', 'color': 'primary'}, 'text': user_group}
+                    ]},
+                    {'component': 'VRow', 'props': {'dense': True}, 'content': [
+                        _metric_card('积分', str(credits), 'primary'),
+                        _metric_card('威望', str(prestige), 'secondary'),
+                        _metric_card('车票', str(tickets), 'success'),
+                        _metric_card('贡献', str(contribution), 'warning'),
                     ]}
-                ]
-            })
-        
-        # 2. 资产趋势图（如果有历史数据）
+                ]}
+            ]
+        }]
+
+        # 资产趋势图
         if asset_history and len(asset_history) >= 2:
-            asset_history = sorted(asset_history, key=lambda x: x.get('date', ''))[-30:]  # 最近30条
+            asset_history = sorted(asset_history, key=lambda x: x.get('date', ''))[-30:]
             dates = [item.get('date', '') for item in asset_history]
             credits_data = [item.get('credits', 0) for item in asset_history]
             tickets_data = [item.get('tickets', 0) for item in asset_history]
-            
-            components.append({
+            page.append({
                 'component': 'VCard',
                 'props': {'variant': 'flat', 'class': 'mb-3'},
                 'content': [
-                    {'component': 'VCardTitle', 'text': '📈 资产趋势（最近30次）'},
-                    {'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': [
-                        {'component': 'VApexChart',
-                         'props': {
-                             'type': 'line',
-                             'height': 300,
-                             'options': {
-                                 'chart': {'toolbar': {'show': False}, 'zoom': {'enabled': False}},
-                                 'stroke': {'curve': 'smooth', 'width': 2},
-                                 'xaxis': {'categories': dates, 'labels': {'rotate': -45, 'style': {'fontSize': '10px'}}},
-                                 'yaxis': {'labels': {'style': {'fontSize': '10px'}}},
-                                 'legend': {'position': 'top'},
-                                 'grid': {'strokeDashArray': 3},
-                             },
-                             'series': [
-                                 {'name': '积分', 'data': credits_data},
-                                 {'name': '车票', 'data': tickets_data},
-                             ]
-                         }}
-                    ]}
+                    {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': '📈 资产趋势图'},
+                    {'component': 'VApexChart',
+                     'props': {
+                         'height': 220,
+                         'options': {
+                             'chart': {'type': 'line', 'toolbar': {'show': True}},
+                             'stroke': {'curve': 'smooth', 'width': 3},
+                             'xaxis': {'categories': dates},
+                             'colors': ['#3B82F6', '#F59E0B'],
+                             'legend': {'show': True},
+                             'noData': {'text': '暂无资产趋势数据'},
+                         },
+                         'series': [
+                             {'name': '积分', 'data': credits_data},
+                             {'name': '车票', 'data': tickets_data},
+                         ]
+                     }}
                 ]
             })
-        
-        # 3. 执行记录表格
+
+        # 执行记录表格
         if history:
-            components.append({
+            page.append({
                 'component': 'VCard',
                 'props': {'variant': 'flat', 'class': 'mb-3'},
                 'content': [
-                    {'component': 'VCardTitle', 'text': f'🗂️ 执行记录（共 {len(history)} 条，显示最近30条）'},
+                    {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': f'🗂️ 执行记录（共 {len(history)} 条）'},
                     {'component': 'VTable', 'props': {'density': 'compact', 'hover': True}, 'content': [
                         {'component': 'thead', 'content': [{
                             'component': 'tr', 'content': [
-                                {'component': 'th', 'props': {'style': 'text-align:center; width: 22%;'}, 'text': '时间'},
-                                {'component': 'th', 'props': {'style': 'text-align:center; width: 12%;'}, 'text': '触发'},
+                                {'component': 'th', 'props': {'style': 'text-align:center; width: 26%;'}, 'text': '时间'},
+                                {'component': 'th', 'props': {'style': 'text-align:center; width: 14%;'}, 'text': '触发方式'},
                                 {'component': 'th', 'props': {'style': 'text-align:center; width: 12%;'}, 'text': '登录'},
-                                {'component': 'th', 'props': {'style': 'text-align:center; width: 14%;'}, 'text': '签到'},
+                                {'component': 'th', 'props': {'style': 'text-align:center; width: 16%;'}, 'text': '签到'},
                                 {'component': 'th', 'props': {'style': 'text-align:center; width: 20%;'}, 'text': '奖励'},
-                                {'component': 'th', 'props': {'style': 'text-align:center; width: 20%;'}, 'text': '消息'},
+                                {'component': 'th', 'props': {'style': 'text-align:center; width: 12%;'}, 'text': '消息'},
                             ]
                         }]},
                         {'component': 'tbody', 'content': [{
                             'component': 'tr', 'content': [
-                                {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('executed_at', '-')},
-                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('source_text', '-')},
-                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('login_status', '-')},
-                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('signin_status', '-')},
-                                {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('reward', '-') or '-'},
-                                {'component': 'td', 'props': {'style': 'text-align:center; font-size:12px;'}, 'text': item.get('message', '-')[:30]},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('executed_at', '-')},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_source_chip(item.get('source_text') or self._source_text(item.get('source')))]},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_status_chip(item.get('login_status', '-'))]},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'content': [_status_chip(item.get('signin_status', '-'))]},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': item.get('reward', '-') or '-'},
+                                {'component': 'td', 'props': {'style': 'text-align:center;'}, 'text': (item.get('message', '-') or '-')[:30]},
                             ]
                         } for item in history[:30]]}
                     ]}
                 ]
             })
-        
-        return components
+
+        return page
 
     def api_run(self):
         return self.run_once(source="api")
