@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -45,12 +45,15 @@ class SijisheSignIn(_PluginBase):
     _uid = ""
     _use_flaresolverr = False
     _flaresolverr_url = "http://127.0.0.1:8191/v1"
+    _retry_count = 3
+    _retry_interval_minutes = 5
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
     _last_result_key = "last_result"
     _user_info_key = "user_info"
     _asset_history_key = "asset_history"
+    _retry_state_key = "retry_state"
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -68,6 +71,8 @@ class SijisheSignIn(_PluginBase):
                 self._uid = str(config.get("uid") or "").strip()
                 self._use_flaresolverr = config.get("use_flaresolverr", False)
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191/v1").strip()
+                self._retry_count = max(0, int(config.get("retry_count") or 3))
+                self._retry_interval_minutes = max(1, int(config.get("retry_interval_minutes") or 5))
 
             if self._onlyonce:
                 logger.info("司机社签到自用：保存配置后执行一次")
@@ -104,6 +109,8 @@ class SijisheSignIn(_PluginBase):
             "uid": self._uid,
             "use_flaresolverr": self._use_flaresolverr,
             "flaresolverr_url": self._flaresolverr_url,
+            "retry_count": self._retry_count,
+            "retry_interval_minutes": self._retry_interval_minutes,
         })
 
     @staticmethod
@@ -142,86 +149,71 @@ class SijisheSignIn(_PluginBase):
             {
                 'component': 'VForm',
                 'content': [
+                    # ── Card 1：基本配置 ──────────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr'}}]},
-                                ]
-                            }]
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🟢 基本配置'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr'}}]},
+                                    ]
+                                }
+                            ]
                         }]
                     },
+                    # ── Card 2：账号与站点 ──────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mb-3'}, 'text': '账号配置'}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password', 'placeholder': '明文密码，会自动MD5加密'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'uid', 'label': 'UID（可选）', 'placeholder': '如 747026；自动发现失败时作为兜底'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://xsijishe.net'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（可留空）', 'placeholder': 'http://127.0.0.1:7890'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191/v1'}}]},
-                                ]
-                            }]
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '👤 账号与站点'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'uid', 'label': 'UID（可选）', 'placeholder': '如 747026'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://xsijishe.net'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址', 'placeholder': 'http://127.0.0.1:7890'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191/v1'}}]},
+                                    ]
+                                }
+                            ]
                         }]
                     },
+                    # ── Card 3：定时与重试 ──────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'tonal', 'class': 'mb-2'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '📋 使用说明'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-lock', 'size': 18, 'class': 'mr-2', 'color': 'primary'}},
-                                            {'component': 'span', 'text': '密码使用明文填写，登录时会自动MD5加密'}
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '⏰ 定时与重试'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_count', 'label': '失败重试次数', 'type': 'number', 'placeholder': '3'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_interval_minutes', 'label': '重试间隔（分钟）', 'type': 'number', 'placeholder': '5'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [
+                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内。随机延时 1-30 分钟始终生效。'}
                                         ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-card-account-details-outline', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': 'UID 可留空自动发现；失败时可手填作为用户资料兜底'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-web-network', 'size': 18, 'class': 'mr-2', 'color': 'warning'}},
-                                            {'component': 'span', 'text': '该站点需要代理访问'}
-                                        ]},
-                                    ]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '⚙️ 默认行为'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-web', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': '默认站点：https://xsijishe.net'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-timer-outline', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': '默认超时：20 秒'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-shuffle', 'size': 18, 'class': 'mr-2', 'color': 'warning'}},
-                                            {'component': 'span', 'text': '仅定时任务会随机延时 1-30 分钟执行'}
-                                        ]},
-                                    ]},
-                                ]
-                            }]
+                                    ]
+                                }
+                            ]
                         }]
-                    }
+                    },
                 ]
             }
         ], {
@@ -238,6 +230,8 @@ class SijisheSignIn(_PluginBase):
             "uid": "",
             "use_flaresolverr": False,
             "flaresolverr_url": "http://127.0.0.1:8191/v1",
+            "retry_count": 3,
+            "retry_interval_minutes": 5,
         }
 
     def get_page(self) -> List[dict]:
@@ -391,6 +385,14 @@ class SijisheSignIn(_PluginBase):
 
     def run_by_cron(self):
         self._log_step("【run_by_cron】被主调度器调用，source=cron")
+        today = datetime.now().strftime("%Y-%m-%d")
+        retry_state = self.get_data(self._retry_state_key)
+        if isinstance(retry_state, dict):
+            if retry_state.get("date") == today and retry_state.get("attempt", 0) >= self._retry_count:
+                self._log_step(f"当日重试次数已耗尽（已尝试 {retry_state['attempt']} 次），跳过本次定时触发")
+                return
+            if retry_state.get("date") != today:
+                self.save_data(self._retry_state_key, None)
         return self.run_once(source="cron")
 
     def run_by_onlyonce(self):
@@ -1032,7 +1034,45 @@ class SijisheSignIn(_PluginBase):
         self._save_result(result)
         if self._notify:
             self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+
+        # ── 失败重试调度 ──────────────────────────────────────────────
+        if result.get("result_label") == "失败" and self._retry_count > 0:
+            existing_jobs = [j.id for j in self._scheduler.get_jobs()]
+            if f"{self.plugin_config_prefix}retry" not in existing_jobs:
+                retry_state = self.get_data(self._retry_state_key) or {}
+                today = datetime.now().strftime("%Y-%m-%d")
+                if retry_state.get("date") != today:
+                    retry_state = {"date": today, "attempt": 0}
+                retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+                if retry_state["attempt"] <= self._retry_count:
+                    next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+                    self._scheduler.add_job(
+                        func=self._retry_wrapper,
+                        trigger="date",
+                        run_date=next_retry_time,
+                        id=f"{self.plugin_config_prefix}retry",
+                        name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
+                        kwargs={"attempt": retry_state["attempt"]},
+                        replace=True,
+                    )
+                    self._log_step(
+                        f"签到失败，第 {retry_state['attempt']} 次重试已安排在 "
+                        f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
+                    )
+                    retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
+                    retry_state["attempt"] = self._retry_count
+                self.save_data(self._retry_state_key, retry_state)
+        elif result.get("result_label") == "成功":
+            if self.get_data(self._retry_state_key):
+                self.save_data(self._retry_state_key, None)
         return result
+
+    def _retry_wrapper(self, attempt: int):
+        """由 APScheduler 调用的重试入口，避免直接传递 self.run_once（不可序列化）"""
+        self._log_step(f"【重试 #{attempt}】触发执行")
+        self.run_once(source="cron")
 
     def stop_service(self):
         if self._scheduler:

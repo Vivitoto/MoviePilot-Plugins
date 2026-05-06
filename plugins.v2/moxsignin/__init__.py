@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -44,12 +44,15 @@ class MoxSignIn(_PluginBase):
     _remember = True
     _user_id = ""
     _refresh_user_info = True
+    _retry_count = 3
+    _retry_interval_minutes = 5
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
     _last_result_key = "last_result"
     _user_info_key = "user_info"
     _asset_history_key = "asset_history"
+    _retry_state_key = "retry_state"
     _group_name_map = {
         1: "魔域创造者 (管理员)",
         2: "魔域守护者 (超级版主)",
@@ -89,6 +92,8 @@ class MoxSignIn(_PluginBase):
                 self._remember = config.get("remember", True)
                 self._user_id = str(config.get("user_id") or "").strip()
                 self._refresh_user_info = config.get("refresh_user_info", True)
+                self._retry_count = max(0, int(config.get("retry_count") or 3))
+                self._retry_interval_minutes = max(1, int(config.get("retry_interval_minutes") or 5))
 
             if self._onlyonce:
                 logger.info("Mox签到自用：保存配置后执行一次")
@@ -125,6 +130,8 @@ class MoxSignIn(_PluginBase):
             "remember": self._remember,
             "user_id": self._user_id,
             "refresh_user_info": self._refresh_user_info,
+            "retry_count": self._retry_count,
+            "retry_interval_minutes": self._retry_interval_minutes,
         })
 
     @staticmethod
@@ -163,87 +170,71 @@ class MoxSignIn(_PluginBase):
             {
                 'component': 'VForm',
                 'content': [
+                    # ── Card 1：基本配置 ──────────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '执行签到时刷新用户信息'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'div'}]},
-                                ]
-                            }]
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🟢 基本配置'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'remember', 'label': '保持登录'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_user_info', 'label': '刷新用户信息'}}]},
+                                    ]
+                                }
+                            ]
                         }]
                     },
+                    # ── Card 2：账号与站点 ──────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'flat', 'class': 'mb-4'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mb-3'}, 'text': '账号配置'}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'user_id', 'label': '用户ID（可选）', 'placeholder': '如 458775'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-subtitle-2 mt-2 mb-3'}, 'text': '执行配置'}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://mox.moxing.chat'}}]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（可留空）', 'placeholder': 'http://127.0.0.1:7890'}}]},
-                                ]
-                            }]
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '👤 账号与站点'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'username', 'label': '用户名'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'password', 'label': '密码', 'type': 'password'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'user_id', 'label': '用户ID（可选）', 'placeholder': '如 458775'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '站点地址', 'placeholder': 'https://mox.moxing.chat'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址', 'placeholder': 'http://127.0.0.1:7890'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'timeout', 'label': '请求超时（秒）', 'type': 'number', 'placeholder': '20'}}]},
+                                    ]
+                                }
+                            ]
                         }]
                     },
+                    # ── Card 3：定时与重试 ──────────────────────────────
                     {
                         'component': 'VCard',
                         'props': {'variant': 'tonal', 'class': 'mb-2'},
                         'content': [{
                             'component': 'VCardItem',
-                            'content': [{
-                                'component': 'VRow',
-                                'content': [
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '📋 使用说明'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-account-search', 'size': 18, 'class': 'mr-2', 'color': 'primary'}},
-                                            {'component': 'span', 'text': '如自动识别用户资料失败，可手动填写用户 ID'}
+                            'content': [
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '⏰ 定时与重试'},
+                                {
+                                    'component': 'VRow',
+                                    'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_field_component, 'props': {'model': 'cron', 'label': '定时任务', 'placeholder': '10 9 * * *'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_count', 'label': '失败重试次数', 'type': 'number', 'placeholder': '3'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_interval_minutes', 'label': '重试间隔（分钟）', 'type': 'number', 'placeholder': '5'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [
+                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内。随机延时 1-30 分钟始终生效。'}
                                         ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-refresh-circle', 'size': 18, 'class': 'mr-2', 'color': 'success'}},
-                                            {'component': 'span', 'text': '可单独控制签到后是否刷新用户信息与资产'}
-                                        ]},
-                                    ]},
-                                    {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold'}, 'text': '⚙️ 默认行为'},
-                                        {'component': 'div', 'props': {'class': 'mt-2 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-web', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': '默认站点：https://mox.moxing.chat'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-timer-outline', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': '默认超时：20 秒'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-map-clock', 'size': 18, 'class': 'mr-2', 'color': 'info'}},
-                                            {'component': 'span', 'text': '固定时区：Asia/Shanghai'}
-                                        ]},
-                                        {'component': 'div', 'props': {'class': 'mt-1 text-body-2 d-flex align-center'}, 'content': [
-                                            {'component': 'VIcon', 'props': {'icon': 'mdi-shuffle', 'size': 18, 'class': 'mr-2', 'color': 'warning'}},
-                                            {'component': 'span', 'text': '仅定时任务会随机延时 1-30 分钟执行'}
-                                        ]},
-                                    ]},
-                                ]
-                            }]
+                                    ]
+                                }
+                            ]
                         }]
-                    }
+                    },
                 ]
             }
         ], {
@@ -260,6 +251,8 @@ class MoxSignIn(_PluginBase):
             "remember": True,
             "user_id": "",
             "refresh_user_info": True,
+            "retry_count": 3,
+            "retry_interval_minutes": 5,
         }
 
     def get_page(self) -> List[dict]:
@@ -960,8 +953,43 @@ class MoxSignIn(_PluginBase):
             steps.append('✅ 执行完成')
             self._log_step('执行完成')
             self._save_result(result)
+            logger.info(f"Mox签到自用执行完成：{result.get('result_label')} - {result.get('message')}")
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+
+            # ── 失败重试调度 ──────────────────────────────────────────────
+            if result.get("result_label") == "失败" and self._retry_count > 0:
+                # 检查是否已有待执行的重试任务，避免重复排队
+                existing_jobs = [j.id for j in self._scheduler.get_jobs()]
+                if f"{self.plugin_config_prefix}retry" not in existing_jobs:
+                    retry_state = self.get_data(self._retry_state_key) or {}
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    if retry_state.get("date") != today:
+                        retry_state = {"date": today, "attempt": 0}
+                    retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+                    if retry_state["attempt"] <= self._retry_count:
+                        next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+                        self._scheduler.add_job(
+                            func=self._retry_wrapper,
+                            trigger="date",
+                            run_date=next_retry_time,
+                            id=f"{self.plugin_config_prefix}retry",
+                            name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
+                            kwargs={"attempt": retry_state["attempt"]},
+                            replace=True,
+                        )
+                        self._log_step(
+                            f"签到失败，第 {retry_state['attempt']} 次重试已安排在 "
+                            f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
+                        )
+                        retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
+                        retry_state["attempt"] = self._retry_count
+                    self.save_data(self._retry_state_key, retry_state)
+            elif result.get("result_label") == "成功":
+                if self.get_data(self._retry_state_key):
+                    self.save_data(self._retry_state_key, None)
             return result
         except Exception as e:
             steps.append(f"💥 执行失败：{str(e)}")
@@ -977,7 +1005,45 @@ class MoxSignIn(_PluginBase):
             logger.error(f"Mox签到自用执行失败：{str(e)}", exc_info=True)
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+
+            # ── 失败重试调度（异常路径）────────────────────────────────────
+            if result.get("result_label") == "失败" and self._retry_count > 0:
+                existing_jobs = [j.id for j in self._scheduler.get_jobs()]
+                if f"{self.plugin_config_prefix}retry" not in existing_jobs:
+                    retry_state = self.get_data(self._retry_state_key) or {}
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    if retry_state.get("date") != today:
+                        retry_state = {"date": today, "attempt": 0}
+                    retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+                    if retry_state["attempt"] <= self._retry_count:
+                        next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+                        self._scheduler.add_job(
+                            func=self._retry_wrapper,
+                            trigger="date",
+                            run_date=next_retry_time,
+                            id=f"{self.plugin_config_prefix}retry",
+                            name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
+                            kwargs={"attempt": retry_state["attempt"]},
+                            replace=True,
+                        )
+                        self._log_step(
+                            f"签到失败（异常），第 {retry_state['attempt']} 次重试已安排在 "
+                            f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
+                        )
+                        retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
+                        retry_state["attempt"] = self._retry_count
+                    self.save_data(self._retry_state_key, retry_state)
+            elif result.get("result_label") == "成功":
+                if self.get_data(self._retry_state_key):
+                    self.save_data(self._retry_state_key, None)
             return result
+
+    def _retry_wrapper(self, attempt: int):
+        """由 APScheduler 调用的重试入口，避免直接传递 self.run_once（不可序列化）"""
+        self._log_step(f"【重试 #{attempt}】触发执行")
+        self.run_once(source="cron")
 
     def stop_service(self):
         if self._scheduler:
