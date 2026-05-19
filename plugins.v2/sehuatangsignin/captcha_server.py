@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "0.1.13",
+            "version": "0.1.14",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -649,6 +649,7 @@ def is_expired(account_id: str, timeout: int = 300) -> bool:
 # ─── FS helpers ───────────────────────────────────────────
 _fs_url_cache: str = ""
 _proxy_url_cache: str = ""
+_fs_user_agents: dict = {}
 
 
 def _get_fs_url() -> str:
@@ -735,9 +736,12 @@ def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) ->
     if d.get("status") != "ok":
         return {"error": d.get("message", "unknown")}
     sol = d.get("solution", {})
+    user_agent = sol.get("userAgent") or sol.get("user_agent")
+    if session_id and user_agent:
+        _fs_user_agents[session_id] = user_agent
     _merge_solution_cookies(cookies, sol.get("cookies", []))
     return {"html": sol.get("response", ""), "cookies": sol.get("cookies", []),
-            "status": sol.get("status", 0)}
+            "status": sol.get("status", 0), "userAgent": user_agent}
 
 
 def fs_create_session() -> str:
@@ -779,9 +783,14 @@ def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
         "postData": body,
         "headers": {
             "Accept": "*/*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Content-Type": "text/plain",
             "Origin": BASE_URL,
             "Referer": f"{BASE_URL}/plugin.php?id=dd_sign",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            **({"User-Agent": _fs_user_agents.get(fs_sid)} if _fs_user_agents.get(fs_sid) else {}),
         },
         "maxTimeout": 30000,
     }, cookies)
