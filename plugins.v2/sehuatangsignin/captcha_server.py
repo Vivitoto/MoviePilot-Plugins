@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "0.1.17",
+            "version": "1.0.0",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -573,6 +573,12 @@ def create_app():
             session["answer"] = answer
             session["solved"] = True
             session["solved_at"] = time.time()
+            # The plugin only needs the answer after submit. Drop embedded base64
+            # captcha images immediately so solved sessions do not keep image data
+            # on disk while the plugin is still polling or after a hot reload.
+            captcha_data = session.get("captcha_data")
+            if isinstance(captcha_data, dict):
+                session["captcha_data"] = {"type": captcha_data.get("type")}
             _captcha_sessions[account_id] = session
             _save_sessions_unlocked()
 
