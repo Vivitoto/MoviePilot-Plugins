@@ -5,6 +5,8 @@ Started on-demand, supports multi-account via URL path.
 import base64
 import json
 import re
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -19,7 +21,17 @@ try:
     from flask import Flask, redirect, render_template_string, request
 except ImportError:
     Flask = None
-    logger.warning("[SehuatangCaptcha] Flask not installed. Run: pip install flask")
+    logger.warning("[SehuatangCaptcha] Flask not installed, attempting auto-install via pip...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "flask"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=120
+        )
+        from flask import Flask, redirect, render_template_string, request
+        logger.info("[SehuatangCaptcha] Flask auto-installed successfully")
+    except Exception as e:
+        logger.warning(f"[SehuatangCaptcha] Auto-install Flask failed: {e}. Run: pip install flask")
 
 # ─── Constants ────────────────────────────────────────────
 BASE_URL = "https://sehuatang.net"
