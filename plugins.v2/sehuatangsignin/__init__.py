@@ -1,9 +1,11 @@
+import concurrent.futures
 import json
 import re
 import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -38,10 +40,10 @@ from .captcha_server import (
 
 
 class SehuatangSignin(_PluginBase):
-    plugin_name = "色花堂签到"
-    plugin_desc = "FlareSolverr + 人工辅助验证码，支持多账号。遇到验证码时企微通知URL，手动拖动后自动完成签到。"
+    plugin_name = "98签到自用"
+    plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.4"
+    plugin_version = "0.1.5"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -55,7 +57,14 @@ class SehuatangSignin(_PluginBase):
     _timeout = 30
     _timezone = "Asia/Shanghai"
 
-    # Multi-account: one per line, "name | cookie1=val1; cookie2=val2"
+    # Multi-account config. New UI stores account/cookie in fixed slots;
+    # accounts_text is kept for backward compatibility with older versions.
+    _account_slots = 20
+    _account_names: list = []
+    _account_cookies: list = []
+    _account_count = 1
+    _account_interval_seconds = 3
+    _parallel_accounts = False
     _accounts_text = ""
     _accounts: list = []
 
@@ -84,7 +93,29 @@ class SehuatangSignin(_PluginBase):
                 self._onlyonce = config.get("onlyonce", False)
                 self._cron = config.get("cron") or "30 9 * * *"
                 self._timeout = max(1, int(config.get("timeout") or 30))
+                self._account_interval_seconds = max(0, int(config.get("account_interval_seconds") or 3))
+                self._parallel_accounts = bool(config.get("parallel_accounts", False))
                 self._accounts_text = str(config.get("accounts_text") or "").strip()
+                self._account_names = []
+                self._account_cookies = []
+                for idx in range(1, self._account_slots + 1):
+                    self._account_names.append(str(config.get(f"account_{idx}_name") or "").strip())
+                    self._account_cookies.append(str(config.get(f"account_{idx}_cookie") or "").strip())
+
+                legacy_accounts = self._parse_accounts_text(self._accounts_text)
+                # Migrate legacy textarea config into the new slot UI on first load.
+                if legacy_accounts and not any(self._account_cookies):
+                    for idx, account in enumerate(legacy_accounts[:self._account_slots]):
+                        self._account_names[idx] = account.get("name", "")
+                        self._account_cookies[idx] = account.get("cookie_str", "")
+
+                saved_count = int(config.get("account_count") or 0)
+                inferred_count = max(
+                    [idx + 1 for idx, cookie in enumerate(self._account_cookies) if cookie] or
+                    [min(len(legacy_accounts), self._account_slots) or 1]
+                )
+                self._account_count = min(self._account_slots, max(1, saved_count, inferred_count))
+
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191").rstrip("/")
                 self._use_flaresolverr = config.get("use_flaresolverr", True)
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
@@ -117,25 +148,39 @@ class SehuatangSignin(_PluginBase):
         return self._enabled and bool(self._flaresolverr_url)
 
     def _update_config(self):
-        self.update_config({
+        account_lines = []
+        for idx in range(self._account_slots):
+            name = (self._account_names[idx] if idx < len(self._account_names) else "").strip()
+            cookie = (self._account_cookies[idx] if idx < len(self._account_cookies) else "").strip()
+            if cookie:
+                account_lines.append(f"{name or f'账号{idx + 1}'} | {cookie}")
+
+        config = {
             "enabled": self._enabled, "notify": self._notify, "onlyonce": self._onlyonce,
             "cron": self._cron, "timeout": self._timeout,
-            "accounts_text": self._accounts_text,
+            "account_count": self._account_count,
+            "account_interval_seconds": self._account_interval_seconds,
+            "parallel_accounts": self._parallel_accounts,
+            "accounts_text": "\n".join(account_lines),
             "flaresolverr_url": self._flaresolverr_url,
             "use_flaresolverr": self._use_flaresolverr,
             "proxy_url": self._proxy_url,
             "captcha_port": self._captcha_port, "captcha_timeout": self._captcha_timeout,
             "public_base_url": self._public_base_url,
-        })
+        }
+        for idx in range(1, self._account_slots + 1):
+            config[f"account_{idx}_name"] = self._account_names[idx - 1] if idx - 1 < len(self._account_names) else ""
+            config[f"account_{idx}_cookie"] = self._account_cookies[idx - 1] if idx - 1 < len(self._account_cookies) else ""
+        self.update_config(config)
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         return [{
-            "cmd": "/sht_signin",
+            "cmd": "/98_signin",
             "event": EventType.PluginAction,
-            "desc": "执行色花堂签到",
+            "desc": "执行98签到自用",
             "category": "站点",
-            "data": {"action": "sht_signin"},
+            "data": {"action": "98_signin"},
         }]
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -146,7 +191,7 @@ class SehuatangSignin(_PluginBase):
             return []
         return [{
             "id": "SehuatangSignin",
-            "name": "色花堂签到",
+            "name": "98签到自用",
             "trigger": CronTrigger.from_crontab(self._cron),
             "func": self._run_cron,
             "kwargs": {},
@@ -161,13 +206,15 @@ class SehuatangSignin(_PluginBase):
         # ── Account list ──
         if self._accounts:
             account_rows = []
-            for acct in self._accounts:
+            for idx, acct in enumerate(self._accounts):
                 name = acct.get("name", "?")
-                latest = next((r for r in history if r.get("account") == name), None)
+                account_id = self._get_account_id(acct, idx)
+                account_path = quote(account_id, safe="")
+                latest = next((r for r in history if r.get("account") in (name, account_id)), None)
                 status = "✅" if latest and latest.get("success") else "❓"
                 last_time = latest.get("time", "-") if latest else "-"
                 last_msg = latest.get("message", "-") if latest else "未执行"
-                url = f"{self._public_base_url}/{name}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{name}"
+                url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
                 account_rows.append([
                     {'component': 'td', 'text': name},
                     {'component': 'td', 'text': status},
@@ -232,6 +279,50 @@ class SehuatangSignin(_PluginBase):
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         version = getattr(settings, "VERSION_FLAG", "v1")
         cron_component = "VCronField" if version == "v2" else "VTextField"
+        account_cards = []
+        for idx in range(1, self._account_slots + 1):
+            delete_actions = []
+            for move_idx in range(idx, self._account_slots):
+                delete_actions.extend([
+                    f"account_{move_idx}_name = account_{move_idx + 1}_name",
+                    f"account_{move_idx}_cookie = account_{move_idx + 1}_cookie",
+                ])
+            delete_actions.extend([
+                f"account_{self._account_slots}_name = ''",
+                f"account_{self._account_slots}_cookie = ''",
+                "account_count = Math.max(1, (account_count || 1) - 1)",
+            ])
+            delete_script = "function(event) { " + "; ".join(delete_actions) + "; }"
+            account_cards.append({
+                'component': 'VCard',
+                'props': {'variant': 'tonal', 'class': 'mb-2', 'show': f'{{{{ account_count >= {idx} }}}}'},
+                'content': [{
+                    'component': 'VCardText',
+                    'props': {'class': 'py-2'},
+                    'content': [{
+                        'component': 'VRow',
+                        'props': {'align': 'center', 'dense': True},
+                        'content': [
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 2}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'compact', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'compact', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'text-md-right'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
+                        ]
+                    }]
+                }]
+            })
+        add_account_btn = {
+            'component': 'VBtn',
+            'props': {
+                'variant': 'tonal',
+                'color': 'primary',
+                'prepend-icon': 'mdi-plus',
+                'class': 'mt-1',
+                'show': '{{ account_count < 20 }}',
+                'onClick': 'function(event) { account_count = Math.min(20, (account_count || 1) + 1); }',
+            },
+            'text': '添加账号',
+        }
         return [
             {
                 'component': 'VForm',
@@ -261,22 +352,10 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '👤 多账号配置'},
-                                {
-                                    'component': 'VRow',
-                                    'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [
-                                            {'component': 'VTextarea', 'props': {
-                                                'model': 'accounts_text',
-                                                'label': '账号列表（每行一个，格式：名称 | Cookie）',
-                                                'placeholder': '账号1 | _safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0\n账号2 | _safe=aaa; cPNj_2132_auth=bbb',
-                                                'rows': 4,
-                                                'auto-grow': True,
-                                                'hint': '名称用于生成独立 URL 路径（如 /账号1）。\n需要添加账号就新增一行，删除账号就删掉对应行。'
-                                            }}
-                                        ]},
-                                    ]
-                                }
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-2'}, 'text': '👤 多账号配置'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '每个账号单独填写 Cookie。当前表单最多 20 个；如需无限数量需改远程 Vue 配置组件。'},
+                                *account_cards,
+                                add_account_btn
                             ]
                         }]
                     },
@@ -286,15 +365,15 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🖥️ FlareSolverr 与验证码 Relay'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🖥️ 访问与验证码'},
                                 {
                                     'component': 'VRow',
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 sehuatang）', 'placeholder': 'http://192.168.31.216:7890'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': 'Relay 端口', 'type': 'number', 'placeholder': '5099'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '公网地址（反代后）', 'placeholder': 'https://captcha.example.com'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98）', 'placeholder': 'http://192.168.31.216:7890'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '公网地址（可选）', 'placeholder': 'https://captcha.example.com'}}]},
                                     ]
                                 }
                             ]
@@ -306,12 +385,14 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '⏰ 定时'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '⏰ 定时与多账号'},
                                 {
                                     'component': 'VRow',
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': cron_component, 'props': {'model': 'cron', 'label': '定时任务'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 遇到验证码时通过企微通知发送 Relay URL，手动拖动完成后再自动提交签到'}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': cron_component, 'props': {'model': 'cron', 'label': '定时任务'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VTextField', 'props': {'model': 'account_interval_seconds', 'label': '账号启动间隔(秒)', 'type': 'number', 'placeholder': '3'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'parallel_accounts', 'label': '并行处理多账号'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 串行：前一个账号完成后再处理下一个；并行：按间隔依次启动，验证码链接互不混淆。'}]},
                                     ]
                                 }
                             ]
@@ -324,26 +405,10 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '📋 使用说明与注意事项'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '\n'.join([
-                                    '🔹 前置条件：',
-                                    '  1. 部署 FlareSolverr（Docker 或独立进程），默认地址 http://127.0.0.1:8191',
-                                    '  2. 安装 Flask 依赖：pip install flask',
-                                    '  3. 配置反代：将 public_base_url 指向本机 captcha_port 端口',
-                                    '  4. 确保 MP 环境能访问 sehuatang（需 proxy_url 或路由器代理）',
-                                    '',
-                                    '🔹 Cookie 获取方法：',
-                                    '  1. 浏览器登录 sehuatang 后，F12 → Application → Cookies',
-                                    '  2. 复制 _safe、cPNj_2132_auth、cPNj_2132_saltkey、cPNj_2132_sid 四个 cookie',
-                                    '  3. 在账号配置中填入（每行一个账号）',
-                                    '',
-                                    '🔹 Cookie 必须在有效期内（通常 30 天左右），过期需重新获取',
-                                    '🔹 验证码有效时间约 4-5 分钟，超时自动作废，下次触发重新获取',
-                                    '🔹 验证码 URL 格式：{public_base_url}/{账号名称}（如 https://captcha.example.com/账号1）',
-                                    '🔹 多账号按顺序处理，前一账号完成后自动进入下一账号',
-                                    '🔹 遇到验证码时通过企微通知推送链接，不会静默失败',
-                                    '🔹 插件会在启动时自动启动内嵌 HTTP Server（端口为 captcha_port），监听验证码提交',
-                                ])},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '📋 简要说明'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '① 先部署 FlareSolverr；访问受限时填写代理。'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '② Cookie 从浏览器登录后复制，过期后重新填写。'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '③ 有验证码会推送链接，打开后拖动提交。'},
                             ]
                         }]
                     },
@@ -351,7 +416,30 @@ class SehuatangSignin(_PluginBase):
             }
         ], {
             "enabled": False, "notify": True, "onlyonce": False, "cron": "30 9 * * *",
+            "account_count": 1,
+            "account_interval_seconds": 3,
+            "parallel_accounts": False,
             "accounts_text": "",
+            "account_1_name": "", "account_1_cookie": "",
+            "account_2_name": "", "account_2_cookie": "",
+            "account_3_name": "", "account_3_cookie": "",
+            "account_4_name": "", "account_4_cookie": "",
+            "account_5_name": "", "account_5_cookie": "",
+            "account_6_name": "", "account_6_cookie": "",
+            "account_7_name": "", "account_7_cookie": "",
+            "account_8_name": "", "account_8_cookie": "",
+            "account_9_name": "", "account_9_cookie": "",
+            "account_10_name": "", "account_10_cookie": "",
+            "account_11_name": "", "account_11_cookie": "",
+            "account_12_name": "", "account_12_cookie": "",
+            "account_13_name": "", "account_13_cookie": "",
+            "account_14_name": "", "account_14_cookie": "",
+            "account_15_name": "", "account_15_cookie": "",
+            "account_16_name": "", "account_16_cookie": "",
+            "account_17_name": "", "account_17_cookie": "",
+            "account_18_name": "", "account_18_cookie": "",
+            "account_19_name": "", "account_19_cookie": "",
+            "account_20_name": "", "account_20_cookie": "",
             "flaresolverr_url": "http://127.0.0.1:8191",
             "use_flaresolverr": True,
             "proxy_url": "", "captcha_port": 5099, "captcha_timeout": 300,
@@ -379,7 +467,7 @@ class SehuatangSignin(_PluginBase):
         """Handle plugin action from command/WeChat menu."""
         if not event or not event.event_data:
             return
-        if event.event_data.get("action") != "sht_signin":
+        if event.event_data.get("action") not in ("98_signin", "sht_signin"):
             return
         logger.info("[SehuatangSignin] 收到手动触发指令")
         self._parse_accounts()
@@ -388,19 +476,61 @@ class SehuatangSignin(_PluginBase):
     # ── Core sign-in logic (multi-account loop) ───────────
     def _do_signin(self):
         if not self._accounts:
-            logger.warning("[SehuatangSignin] 未配置账号，请在插件设置中填写 accounts_text")
+            logger.warning("[SehuatangSignin] 未配置账号，请在插件设置中填写账号")
             return
 
-        all_results = []
+        indexed_accounts = []
+        seen_ids = {}
         for idx, account in enumerate(self._accounts):
-            account_id = self._get_account_id(account, idx)
-            logger.info(f"[SehuatangSignin] [{idx+1}/{len(self._accounts)}] 处理账号: {account_id}")
-            result = self._signin_single(account, account_id)
-            all_results.append({"account": account_id, **result})
-            if idx < len(self._accounts) - 1:
-                time.sleep(3)
+            raw_account_id = self._get_account_id(account, idx)
+            seen_ids[raw_account_id] = seen_ids.get(raw_account_id, 0) + 1
+            account_id = raw_account_id if seen_ids[raw_account_id] == 1 else f"{raw_account_id}_{seen_ids[raw_account_id]}"
+            indexed_accounts.append((idx, account, account_id))
+
+        if self._parallel_accounts and len(indexed_accounts) > 1:
+            all_results = self._do_signin_parallel(indexed_accounts)
+        else:
+            all_results = self._do_signin_serial(indexed_accounts)
+
         self._notify_summary(all_results)
         self._save_results(all_results)
+
+    def _do_signin_serial(self, indexed_accounts: list) -> list:
+        all_results = []
+        for pos, (idx, account, account_id) in enumerate(indexed_accounts):
+            logger.info(f"[SehuatangSignin] [{idx+1}/{len(indexed_accounts)}] 串行处理账号: {account_id}")
+            result = self._signin_single(account, account_id)
+            all_results.append({"account": account_id, **result})
+            if pos < len(indexed_accounts) - 1 and self._account_interval_seconds > 0:
+                time.sleep(self._account_interval_seconds)
+        return all_results
+
+    def _do_signin_parallel(self, indexed_accounts: list) -> list:
+        all_results = []
+        futures = []
+        logger.info(
+            f"[SehuatangSignin] 并行处理 {len(indexed_accounts)} 个账号，启动间隔 {self._account_interval_seconds} 秒"
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(indexed_accounts)) as executor:
+            for idx, account, account_id in indexed_accounts:
+                logger.info(f"[SehuatangSignin] [{idx+1}/{len(indexed_accounts)}] 并行启动账号: {account_id}")
+                future = executor.submit(self._signin_single, account, account_id)
+                futures.append((idx, account_id, future))
+                if idx < len(indexed_accounts) - 1 and self._account_interval_seconds > 0:
+                    time.sleep(self._account_interval_seconds)
+
+            for idx, account_id, future in futures:
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"[SehuatangSignin] [{account_id}] 并行任务异常：{traceback.format_exc()}")
+                    result = {"success": False, "message": f"异常：{str(e)}", "steps": []}
+                all_results.append({"account": account_id, **result})
+
+        all_results.sort(key=lambda item: next(
+            (idx for idx, _, aid in indexed_accounts if aid == item.get("account")), 0
+        ))
+        return all_results
 
     def _signin_single(self, account: dict, account_id: str) -> dict:
         steps = []
@@ -432,7 +562,8 @@ class SehuatangSignin(_PluginBase):
             logger.info(f"[SehuatangSignin] [{account_id}] 验证码: {cap_type} display_y={dy}")
             init_session(account_id)
             set_captcha_data(account_id, captcha_data, fs_sid)
-            captcha_url = f"{self._public_base_url}/{account_id}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_id}"
+            account_path = quote(account_id, safe="")
+            captcha_url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
             self._send_captcha_notification(cap_type, captcha_url, account_id)
             logger.info(f"[SehuatangSignin] [{account_id}] 已发送验证码通知，等待用户操作...")
             deadline = time.time() + self._captcha_timeout
@@ -480,13 +611,12 @@ class SehuatangSignin(_PluginBase):
         return result
 
     # ── Helpers ────────────────────────────────────────────
-    def _parse_accounts(self):
-        """Parse accounts_text into list of dicts. Format: name | cookie_string per line."""
-        if not self._accounts_text:
-            self._accounts = []
-            return
+    def _parse_accounts_text(self, text: str) -> list:
+        """Parse legacy accounts_text into list of dicts. Format: name | cookie_string per line."""
         accounts = []
-        for line in self._accounts_text.strip().split("\n"):
+        if not text:
+            return accounts
+        for line in text.strip().split("\n"):
             line = line.strip()
             if not line:
                 continue
@@ -501,14 +631,36 @@ class SehuatangSignin(_PluginBase):
                 name = hashlib.md5(cookie_str.encode()).hexdigest()[:8]
             if name and cookie_str:
                 accounts.append({"name": name, "cookie_str": cookie_str})
+        return accounts
+
+    def _parse_accounts(self):
+        """Parse account slots first, fallback to legacy accounts_text."""
+        accounts = []
+        for idx in range(self._account_slots):
+            name = (self._account_names[idx] if idx < len(self._account_names) else "").strip()
+            cookie_str = (self._account_cookies[idx] if idx < len(self._account_cookies) else "").strip()
+            if not cookie_str:
+                continue
+            if not name:
+                name = f"账号{idx + 1}"
+            accounts.append({"name": name, "cookie_str": cookie_str})
+
+        if not accounts:
+            accounts = self._parse_accounts_text(self._accounts_text)
+
         self._accounts = accounts
+        self._accounts_text = "\n".join([f"{a['name']} | {a['cookie_str']}" for a in accounts])
         logger.info(f"[SehuatangSignin] 解析到 {len(self._accounts)} 个账号: {[a['name'] for a in accounts]}")
 
     def _get_account_id(self, account: dict, idx: int) -> str:
-        """Get unique account identifier."""
+        """Get a URL-safe-ish account identifier while keeping Chinese readable."""
         name = str(account.get("name", "")).strip()
         if name:
-            return name
+            # Keep Chinese/English/numbers readable; replace path/query-breaking characters.
+            safe_name = re.sub(r"[\\/\?#%]+", "_", name)
+            safe_name = re.sub(r"\s+", "_", safe_name).strip("_ .")
+            if safe_name:
+                return safe_name[:48]
         import hashlib
         return hashlib.md5(str(account.get("cookie_str", "")).encode()).hexdigest()[:12]
 
@@ -530,7 +682,7 @@ class SehuatangSignin(_PluginBase):
         if not self._notify:
             return
         self.post_message(
-            title=f"🔐 色花堂验证码 - {account_id}",
+            title=f"🔐 98验证码 - {account_id}",
             text=f"验证码类型：{cap_type}\n账号：{account_id}\n\n请在 {self._captcha_timeout // 60} 分钟内打开：\n{url}\n\n拖动滑块到缺口位置后提交",
         )
 
@@ -540,11 +692,11 @@ class SehuatangSignin(_PluginBase):
             return
         success_count = sum(1 for r in results if r.get("success"))
         total = len(results)
-        lines = [f"色花堂签到完成：{success_count}/{total} 成功"]
+        lines = [f"98签到自用完成：{success_count}/{total} 成功"]
         for r in results:
             icon = "✅" if r.get("success") else "❌"
             lines.append(f"  {icon} {r['account']}: {r['message']}")
-        self.post_message(title="色花堂签到汇总", text="\n".join(lines))
+        self.post_message(title="98签到自用汇总", text="\n".join(lines))
 
     def _save_results(self, results: list):
         """Save all results to plugin data."""

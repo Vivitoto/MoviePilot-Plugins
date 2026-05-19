@@ -48,7 +48,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Sehuatang 验证码 - {{ account }}</title>
+<title>98 验证码 - {{ account }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -77,14 +77,14 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="container">
-<h1>🔐 Sehuatang 验证码</h1>
+<h1>🔐 98 验证码</h1>
 <p class="account-tag">账号：{{ account }}</p>
 
 {% if solved %}
 <div class="success-box">
   <p class="success-text">✅ 验证码已提交！</p>
   <p class="info">坐标：{{ answer }}</p>
-  <p class="info">正在完成签到，请稍候...</p>
+  <p class="info">正在继续提交签到，请稍候...</p>
 </div>
 
 {% elif error %}
