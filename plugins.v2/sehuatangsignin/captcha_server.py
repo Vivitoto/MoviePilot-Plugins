@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "0.1.14",
+            "version": "0.1.15",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -776,25 +776,21 @@ def fs_get(fs_sid: str, url: str, cookies: list) -> str:
     return fs_call(fs_sid, {"cmd": "request.get", "url": url, "maxTimeout": 60000}, cookies).get("html", "")
 
 
-def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
-    r = fs_call(fs_sid, {
-        "cmd": "request.post",
-        "url": url,
-        "postData": body,
-        "headers": {
-            "Accept": "*/*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Content-Type": "text/plain",
-            "Origin": BASE_URL,
-            "Referer": f"{BASE_URL}/plugin.php?id=dd_sign",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            **({"User-Agent": _fs_user_agents.get(fs_sid)} if _fs_user_agents.get(fs_sid) else {}),
-        },
-        "maxTimeout": 30000,
-    }, cookies)
-    html = r.get("html", "")
+def _check_headers(fs_sid: str) -> dict:
+    return {
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Content-Type": "text/plain",
+        "Origin": BASE_URL,
+        "Referer": f"{BASE_URL}/plugin.php?id=dd_sign",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        **({"User-Agent": _fs_user_agents.get(fs_sid)} if _fs_user_agents.get(fs_sid) else {}),
+    }
+
+
+def _parse_check_html(html: str) -> dict:
     if "static/safe/js/web.js" in html or "enter-btn" in html or "safeid=" in html:
         return {"code": 403, "message": "safe gate returned", "data": "safe_gate", "raw": html[:300]}
     m = re.search(r"<body>(.+?)</body>", html, re.S)
@@ -803,7 +799,67 @@ def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
             return json.loads(m.group(1))
         except json.JSONDecodeError:
             return {"raw": m.group(1)[:300]}
-    return {"raw": html[:300]}
+    try:
+        return json.loads(html)
+    except json.JSONDecodeError:
+        return {"raw": html[:300]}
+
+
+def _merge_response_cookiejar(cookies: list, jar):
+    returned = []
+    for c in jar:
+        returned.append({
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain or ".sehuatang.net",
+            "path": c.path or "/",
+        })
+    _merge_solution_cookies(cookies, returned)
+
+
+def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
+    """Fallback for sites that reject FlareSolverr request.post but accept normal HTTP POST."""
+    session = requests.Session()
+    proxy = _proxy_url_cache.strip()
+    if proxy:
+        session.proxies.update({"http": proxy, "https": proxy})
+    headers = _check_headers(fs_sid)
+    session.headers.update({k: v for k, v in headers.items() if v})
+    for c in cookies or []:
+        if not c.get("name"):
+            continue
+        session.cookies.set(
+            c.get("name"), c.get("value", ""),
+            domain=c.get("domain") or ".sehuatang.net",
+            path=c.get("path") or "/",
+        )
+    try:
+        resp = session.post(url, data=body.encode("utf-8"), timeout=30)
+        _merge_response_cookiejar(cookies, session.cookies)
+        result = _parse_check_html(resp.text)
+        result.setdefault("http_status", resp.status_code)
+        result.setdefault("via", "direct")
+        return result
+    except Exception as e:
+        return {"code": 599, "message": f"direct check failed: {e}", "data": "direct_error"}
+
+
+def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
+    r = fs_call(fs_sid, {
+        "cmd": "request.post",
+        "url": url,
+        "postData": body,
+        "headers": _check_headers(fs_sid),
+        "maxTimeout": 30000,
+    }, cookies)
+    html = r.get("html", "")
+    result = _parse_check_html(html)
+    result.setdefault("via", "flaresolverr")
+    if result.get("data") == "safe_gate":
+        direct_result = _direct_check_post(fs_sid, url, body, cookies)
+        logger.info(f"[SehuatangCaptcha] FlareSolverr check hit safe_gate; direct fallback: {direct_result.get('data')}")
+        return direct_result
+    return result
 
 
 def extract_json(html: str) -> dict:
