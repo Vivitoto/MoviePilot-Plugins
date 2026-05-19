@@ -41,7 +41,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "色花堂签到"
     plugin_desc = "FlareSolverr + 人工辅助验证码，支持多账号。遇到验证码时企微通知URL，手动拖动后自动完成签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.0"
+    plugin_version = "0.1.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"

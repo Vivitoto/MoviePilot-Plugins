@@ -39,11 +39,12 @@
     "name": "色花堂签到",
     "description": "FlareSolverr + 人工辅助验证码。多账号、企微通知验证码链接、内嵌 Relay Server。",
     "labels": "签到,自动化,消息通知,验证码",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "author": "Vivitoto",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
     "level": 1,
     "history": {
+      "v0.1.1": "修复 captcha_server.py 中 logger import 顺序导致的 NameError：将 from app.log import logger 移至 Flask import fallback 之前。",
       "v0.1.0": "首个版本：FlareSolverr 绕过 Cloudflare + 多账号支持 + 企微通知验证码 Relay URL + 内嵌 Flask HTTP Server 监听验证码提交 + 支持反代公网地址。"
     }
   }

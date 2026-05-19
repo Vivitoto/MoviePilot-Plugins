@@ -13,13 +13,13 @@ from urllib.parse import quote, unquote
 
 import requests
 
+from app.log import logger
+
 try:
     from flask import Flask, redirect, render_template_string, request
 except ImportError:
     Flask = None
     logger.warning("[SehuatangCaptcha] Flask not installed. Run: pip install flask")
-
-from app.log import logger
 
 # ─── Constants ────────────────────────────────────────────
 BASE_URL = "https://sehuatang.net"
@@ -27,7 +27,6 @@ FS_URL_TEMPLATE = "{flaresolverr_url}/v1"
 
 # ─── Session state ────────────────────────────────────────
 # Keyed by account_id: {fs_sid, captcha_data, solved, answer, ...}
-import threading
 _captcha_sessions: dict = {}
 _sessions_lock = threading.Lock()
 
