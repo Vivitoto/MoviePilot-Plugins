@@ -1,11 +1,12 @@
 import concurrent.futures
 import json
 import re
+import threading
 import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -25,17 +26,18 @@ from .captcha_server import (
     destroy_session,
     fetch_captcha_for_account,
     fs_create_session,
+    fs_destroy_session,
     fs_get,
     get_answer,
     init_session,
     is_expired,
     is_solved,
     set_captcha_data,
+    set_base_url,
     set_fs_url,
     set_proxy_url,
     start_server,
     submit_check,
-    BASE_URL,
 )
 
 
@@ -43,7 +45,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.5"
+    plugin_version = "0.1.9"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -68,17 +70,22 @@ class SehuatangSignin(_PluginBase):
     _accounts_text = ""
     _accounts: list = []
 
-    # FlareSolverr
+    # Target site / FlareSolverr
+    _base_url = "https://sehuatang.net"
     _flaresolverr_url = "http://127.0.0.1:8191"
     _use_flaresolverr = True
 
-    # Proxy（访问 sehuatang 需要）
+    # Proxy（访问 98 需要）
     _proxy_url = ""
 
     # Captcha relay
     _captcha_port = 5099
     _captcha_timeout = 300
+    _captcha_fetch_timeout = 300
+    _captcha_check_retries = 2
     _public_base_url = ""
+
+    _captcha_fetch_lock = threading.Lock()
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -116,15 +123,19 @@ class SehuatangSignin(_PluginBase):
                 )
                 self._account_count = min(self._account_slots, max(1, saved_count, inferred_count))
 
+                self._base_url = str(config.get("base_url") or "https://sehuatang.net").strip().rstrip("/")
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191").rstrip("/")
                 self._use_flaresolverr = config.get("use_flaresolverr", True)
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
                 self._captcha_port = max(1, int(config.get("captcha_port") or 5099))
                 self._captcha_timeout = max(60, int(config.get("captcha_timeout") or 300))
+                self._captcha_fetch_timeout = max(30, int(config.get("captcha_fetch_timeout") or 300))
+                self._captcha_check_retries = max(0, int(config.get("captcha_check_retries") or 2))
                 self._public_base_url = str(config.get("public_base_url") or "").strip().rstrip("/")
                 self._parse_accounts()
 
             # Start embedded captcha server
+            set_base_url(self._base_url)
             set_fs_url(self._flaresolverr_url)
             set_proxy_url(self._proxy_url)
             start_server(self._captcha_port)
@@ -162,10 +173,13 @@ class SehuatangSignin(_PluginBase):
             "account_interval_seconds": self._account_interval_seconds,
             "parallel_accounts": self._parallel_accounts,
             "accounts_text": "\n".join(account_lines),
+            "base_url": self._base_url,
             "flaresolverr_url": self._flaresolverr_url,
             "use_flaresolverr": self._use_flaresolverr,
             "proxy_url": self._proxy_url,
             "captcha_port": self._captcha_port, "captcha_timeout": self._captcha_timeout,
+            "captcha_fetch_timeout": self._captcha_fetch_timeout,
+            "captcha_check_retries": self._captcha_check_retries,
             "public_base_url": self._public_base_url,
         }
         for idx in range(1, self._account_slots + 1):
@@ -176,11 +190,11 @@ class SehuatangSignin(_PluginBase):
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
         return [{
-            "cmd": "/98_signin",
+            "cmd": "/sht_signin",
             "event": EventType.PluginAction,
             "desc": "执行98签到自用",
             "category": "站点",
-            "data": {"action": "98_signin"},
+            "data": {"action": "sht_signin"},
         }]
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -369,10 +383,13 @@ class SehuatangSignin(_PluginBase):
                                 {
                                     'component': 'VRow',
                                     'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '域名变更时修改；不要填写末尾 /'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98）', 'placeholder': 'http://192.168.31.216:7890'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '公网地址（可选）', 'placeholder': 'https://captcha.example.com'}}]},
                                     ]
                                 }
@@ -440,9 +457,11 @@ class SehuatangSignin(_PluginBase):
             "account_18_name": "", "account_18_cookie": "",
             "account_19_name": "", "account_19_cookie": "",
             "account_20_name": "", "account_20_cookie": "",
+            "base_url": "https://sehuatang.net",
             "flaresolverr_url": "http://127.0.0.1:8191",
             "use_flaresolverr": True,
             "proxy_url": "", "captcha_port": 5099, "captcha_timeout": 300,
+            "captcha_fetch_timeout": 300, "captcha_check_retries": 2,
             "public_base_url": "",
         }
 
@@ -535,6 +554,8 @@ class SehuatangSignin(_PluginBase):
     def _signin_single(self, account: dict, account_id: str) -> dict:
         steps = []
         result = {"success": False, "message": "", "steps": steps}
+        fs_sid = ""
+        captcha_session_active = False
         try:
             cookies = self._build_cookies(account)
             logger.info(f"[SehuatangSignin] [{account_id}] 创建 FS 会话...")
@@ -544,6 +565,7 @@ class SehuatangSignin(_PluginBase):
                 logger.error(f"[SehuatangSignin] [{account_id}] FS 会话创建失败")
                 return result
             logger.info(f"[SehuatangSignin] [{account_id}] FS 会话: {fs_sid[:16]}...")
+
             is_signed, btn_text = check_sign_status(fs_sid, cookies)
             steps.append(f"签到状态：{btn_text}")
             logger.info(f"[SehuatangSignin] [{account_id}] 签到状态: {btn_text}")
@@ -551,64 +573,101 @@ class SehuatangSignin(_PluginBase):
                 result["success"] = True
                 result["message"] = "今日已签到"
                 return result
-            captcha_data = fetch_captcha_for_account(fs_sid, cookies)
-            if not captcha_data:
-                result["message"] = "无法获取 slide/drag 验证码"
-                logger.warning(f"[SehuatangSignin] [{account_id}] 获取验证码失败")
-                return result
-            cap_type = captcha_data["type"]
-            dy = captcha_data.get("display_y", 0)
-            steps.append(f"验证码类型：{cap_type}")
-            logger.info(f"[SehuatangSignin] [{account_id}] 验证码: {cap_type} display_y={dy}")
-            init_session(account_id)
-            set_captcha_data(account_id, captcha_data, fs_sid)
-            account_path = quote(account_id, safe="")
-            captcha_url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
-            self._send_captcha_notification(cap_type, captcha_url, account_id)
-            logger.info(f"[SehuatangSignin] [{account_id}] 已发送验证码通知，等待用户操作...")
-            deadline = time.time() + self._captcha_timeout
-            while time.time() < deadline:
-                if is_solved(account_id):
-                    logger.info(f"[SehuatangSignin] [{account_id}] 用户已完成验证码")
-                    break
-                if is_expired(account_id, self._captcha_timeout):
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 验证码会话已过期")
-                    break
-                time.sleep(2)
-            if not is_solved(account_id):
-                result["message"] = f"验证码超时（{self._captcha_timeout}秒）"
-                destroy_session(account_id)
-                return result
-            gap_x, gap_y = get_answer(account_id)
-            steps.append(f"用户提交：({gap_x},{gap_y})")
-            logger.info(f"[SehuatangSignin] [{account_id}] 提交验证码 check: ({gap_x},{gap_y})")
-            ok, check_result = submit_check(fs_sid, gap_x, gap_y, cap_type, dy, cookies)
-            if not ok:
-                result["message"] = f"验证码失败：{check_result.get('data', '?')}"
+
+            max_rounds = self._captcha_check_retries + 1
+            for round_no in range(1, max_rounds + 1):
+                if round_no > 1:
+                    steps.append(f"验证码重试：第 {round_no}/{max_rounds} 轮")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 验证码失败后重试，第 {round_no}/{max_rounds} 轮")
+
+                logger.info(
+                    f"[SehuatangSignin] [{account_id}] 等待全局验证码获取锁，"
+                    f"最长获取 {self._captcha_fetch_timeout} 秒"
+                )
+                with self._captcha_fetch_lock:
+                    captcha_data = fetch_captcha_for_account(
+                        fs_sid,
+                        cookies,
+                        max_wait_seconds=self._captcha_fetch_timeout,
+                    )
+                if not captcha_data:
+                    result["message"] = "无法获取支持的验证码（slide/rotate/click），或接口限流/超时"
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 获取验证码失败")
+                    return result
+
+                cap_type = captcha_data["type"]
+                steps.append(f"验证码类型：{cap_type}")
+                logger.info(
+                    f"[SehuatangSignin] [{account_id}] 验证码: {cap_type} "
+                    f"display=({captcha_data.get('display_x')},{captcha_data.get('display_y')}) "
+                    f"master={captcha_data.get('master_width')}x{captcha_data.get('master_height')} "
+                    f"thumb={captcha_data.get('thumb_width')}x{captcha_data.get('thumb_height')}"
+                )
+
+                init_session(account_id)
+                captcha_session_active = True
+                set_captcha_data(account_id, captcha_data, fs_sid)
+                account_path = quote(account_id, safe="")
+                captcha_url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
+                self._send_captcha_notification(cap_type, captcha_url, account_id)
+                logger.info(f"[SehuatangSignin] [{account_id}] 已发送验证码通知，等待用户操作...")
+
+                deadline = time.time() + self._captcha_timeout
+                while time.time() < deadline:
+                    if is_solved(account_id):
+                        logger.info(f"[SehuatangSignin] [{account_id}] 用户已完成验证码")
+                        break
+                    if is_expired(account_id, self._captcha_timeout):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 验证码会话已过期")
+                        break
+                    time.sleep(2)
+
+                if not is_solved(account_id):
+                    result["message"] = f"验证码超时（{self._captcha_timeout}秒）"
+                    return result
+
+                answer = get_answer(account_id)
+                steps.append(f"用户提交：{answer}")
+                logger.info(f"[SehuatangSignin] [{account_id}] 提交验证码 check: {answer}")
+                ok, check_result = submit_check(fs_sid, answer, cap_type, cookies)
+
+                if ok:
+                    steps.append("验证码通过 ✅")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 验证码通过，完成签到...")
+                    sign_result = complete_signin(fs_sid, cookies)
+                    code = sign_result.get("code", -1)
+                    msg = sign_result.get("message", "")
+                    steps.append(f"签到结果：{msg}")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 签到结果: code={code} msg={msg}")
+                    if code == 200:
+                        result["success"] = True
+                        result["message"] = f"签到成功：{msg}"
+                    elif code == 201:
+                        result["success"] = True
+                        result["message"] = "今日已签到"
+                    else:
+                        result["message"] = f"签到异常：{msg}"
+                    return result
+
+                destroy_session(account_id, destroy_fs=False)
+                captcha_session_active = False
+                fail_msg = check_result.get('data', '?')
+                steps.append(f"验证码失败：{fail_msg}")
                 logger.warning(f"[SehuatangSignin] [{account_id}] 验证码 check 失败: {check_result}")
-                destroy_session(account_id)
-                return result
-            steps.append("验证码通过 ✅")
-            logger.info(f"[SehuatangSignin] [{account_id}] 验证码通过，完成签到...")
-            sign_result = complete_signin(fs_sid, cookies)
-            code = sign_result.get("code", -1)
-            msg = sign_result.get("message", "")
-            steps.append(f"签到结果：{msg}")
-            logger.info(f"[SehuatangSignin] [{account_id}] 签到结果: code={code} msg={msg}")
-            if code == 200:
-                result["success"] = True
-                result["message"] = f"签到成功：{msg}"
-            elif code == 201:
-                result["success"] = True
-                result["message"] = "今日已签到"
-            else:
-                result["message"] = f"签到异常：{msg}"
-            destroy_session(account_id)
+                if round_no >= max_rounds:
+                    result["message"] = f"验证码失败：{fail_msg}"
+                    return result
+
+            return result
         except Exception as e:
             logger.error(f"[SehuatangSignin] [{account_id}] 异常：{traceback.format_exc()}")
             result["message"] = f"异常：{str(e)}"
-            destroy_session(account_id)
-        return result
+            return result
+        finally:
+            if captcha_session_active:
+                destroy_session(account_id)
+            elif fs_sid:
+                fs_destroy_session(fs_sid)
 
     # ── Helpers ────────────────────────────────────────────
     def _parse_accounts_text(self, text: str) -> list:
@@ -668,13 +727,15 @@ class SehuatangSignin(_PluginBase):
         """Build cookie list from account config."""
         cookies = []
         cookie_str = str(account.get("cookie_str", "")).strip()
+        host = urlparse(self._base_url or "https://sehuatang.net").hostname or "sehuatang.net"
+        cookie_domain = f".{host.lstrip('.')}"
         if cookie_str:
             for part in cookie_str.split(";"):
                 part = part.strip()
                 if "=" in part:
                     name, value = part.split("=", 1)
                     cookies.append({"name": name.strip(), "value": value.strip(),
-                                    "domain": ".sehuatang.net", "path": "/"})
+                                    "domain": cookie_domain, "path": "/"})
         return cookies
 
     def _send_captcha_notification(self, cap_type: str, url: str, account_id: str):
@@ -683,7 +744,13 @@ class SehuatangSignin(_PluginBase):
             return
         self.post_message(
             title=f"🔐 98验证码 - {account_id}",
-            text=f"验证码类型：{cap_type}\n账号：{account_id}\n\n请在 {self._captcha_timeout // 60} 分钟内打开：\n{url}\n\n拖动滑块到缺口位置后提交",
+            text=(
+                f"账号：{account_id}\n"
+                f"验证码类型：{cap_type}\n\n"
+                f"人工操作地址：\n{url}\n\n"
+                f"请在 {self._captcha_timeout // 60} 分钟内打开并完成验证。\n"
+                f"按页面提示完成 slide/rotate/click 后提交。"
+            ),
         )
 
     def _notify_summary(self, results: list):

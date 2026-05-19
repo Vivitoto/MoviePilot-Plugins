@@ -4,6 +4,7 @@ Started on-demand, supports multi-account via URL path.
 """
 import base64
 import json
+import random
 import re
 import subprocess
 import sys
@@ -51,28 +52,34 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 <title>98 验证码 - {{ account }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .container { width: 100%; max-width: 420px; padding: 12px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .container { width: 100%; max-width: 440px; padding: 12px; }
   h1 { color: #e94560; font-size: 1.2em; text-align: center; margin-bottom: 4px; }
   .account-tag { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 12px; }
   .card { background: #16213e; border-radius: 12px; padding: 14px; margin: 8px 0; }
-  .info { color: #888; font-size: 0.8em; margin: 4px 0; text-align: center; }
+  .info { color: #aaa; font-size: 0.82em; margin: 6px 0; text-align: center; line-height: 1.45; }
+  .hint { color:#e94560; font-weight: 700; }
   .expire-warn { color: #e94560; font-size: 0.8em; text-align: center; }
   .success-box { background: #16213e; border-radius: 12px; padding: 20px; margin: 10px 0; text-align: center; }
   .success-text { color: #2ecc71; font-weight: bold; font-size: 1.2em; }
-  .captcha-area { position: relative; width: 300px; height: 220px; margin: 8px auto; border-radius: 8px; overflow: hidden; border: 2px solid #0f3460; }
-  .captcha-bg { width: 300px; height: 220px; display: block; min-width: 300px; pointer-events: none; }
-  .captcha-thumb { position: absolute; cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .captcha-wrap { overflow-x: auto; padding-bottom: 4px; }
+  .captcha-area { box-sizing: content-box; position: relative; width: {{ master_w }}px; height: {{ master_h }}px; margin: 8px auto; border-radius: 8px; overflow: hidden; border: 2px solid #0f3460; background:#0b1024; touch-action:none; }
+  .captcha-bg { width: {{ master_w }}px; height: {{ master_h }}px; display: block; min-width: {{ master_w }}px; user-select: none; -webkit-user-select: none; object-fit: fill; image-rendering: auto; }
+  .captcha-thumb { position: absolute; cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; z-index: 3; object-fit: fill; image-rendering: auto; }
   .captcha-thumb:active { cursor: grabbing; }
-  .slider-track { width: 300px; height: 44px; margin: 8px auto 0; background: #0f3460; border-radius: 22px; position: relative; overflow: hidden; }
-  .slider-fill { height: 100%; background: #e94560; border-radius: 22px 0 0 22px; width: 0; }
-  .slider-handle { position: absolute; top: 0; width: 60px; height: 44px; background: #e94560; border-radius: 22px; cursor: grab; display: flex; align-items: center; justify-content: center; font-size: 20px; color: white; user-select: none; left: 0; }
-  .slider-handle:active { cursor: grabbing; }
-  .status-bar { text-align: center; margin: 8px 0; font-size: 0.9em; }
-  .coord { color: #e94560; font-weight: bold; }
+  .rotate-stage { box-sizing: content-box; width: {{ master_w }}px; height: {{ master_h }}px; margin: 8px auto; position: relative; border-radius: 8px; overflow:hidden; border:2px solid #0f3460; background:#0b1024; }
+  .rotate-master { width: {{ master_w }}px; height: {{ master_h }}px; display:block; object-fit: fill; image-rendering: auto; }
+  .rotate-thumb { position:absolute; left:50%; top:50%; width:{{ tw }}px; height:{{ th }}px; margin-left: calc(-{{ tw }}px / 2); margin-top: calc(-{{ th }}px / 2); transform: rotate(0deg); transform-origin: 50% 50%; object-fit: fill; image-rendering: auto; }
+  .thumb-preview { box-sizing: content-box; display:block; max-width:none; margin:8px auto; border-radius:6px; border:1px solid #0f3460; background:#0b1024; object-fit: fill; image-rendering: auto; }
+  .range { width: 100%; accent-color: #e94560; }
+  .status-bar { text-align: center; margin: 8px 0; font-size: 0.9em; line-height:1.6; }
+  .coord { color: #e94560; font-weight: bold; word-break: break-all; }
+  .click-dot { position:absolute; width:22px; height:22px; border-radius:50%; background:#e94560; color:white; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold; transform:translate(-50%,-50%); pointer-events:none; z-index:5; box-shadow:0 0 0 2px rgba(255,255,255,.75); }
   .btn { display: block; width: 100%; padding: 14px; border-radius: 10px; border: none; font-size: 16px; cursor: pointer; text-align: center; margin: 8px 0; background: #e94560; color: white; font-weight: bold; }
   .btn:disabled { background: #555; cursor: not-allowed; }
   .btn-subtle { background: #0f3460; color: #e0e0e0; }
+  details { margin-top: 8px; color:#aaa; font-size:12px; }
+  pre { white-space: pre-wrap; word-break: break-all; background:#0b1024; border-radius:8px; padding:8px; margin-top:6px; text-align:left; }
 </style>
 </head>
 <body>
@@ -83,42 +90,59 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 {% if solved %}
 <div class="success-box">
   <p class="success-text">✅ 验证码已提交！</p>
-  <p class="info">坐标：{{ answer }}</p>
+  <p class="info">答案：{{ answer }}</p>
   <p class="info">正在继续提交签到，请稍候...</p>
 </div>
 
 {% elif error %}
 <div class="card"><p style="color:#e94560;text-align:center;">{{ error }}</p>
-  <button class="btn btn-subtle" onclick="location.reload()">🔄 重新获取</button>
+  <button class="btn btn-subtle" onclick="location.reload()">🔄 刷新页面</button>
 </div>
 
 {% elif captcha_ready %}
-  <p class="info">类型：<strong>{{ captcha_type | upper }}</strong> | 显示位置：({{ dx }},{{ dy }}) | 拇指：{{ tw }}×{{ th }}</p>
-  <p class="info" style="color:#e94560;">👆 <strong>拖动红色滑块/拼图块</strong>到缺口位置</p>
+<div class="card">
+  <p class="info">类型：<strong>{{ captcha_type | upper }}</strong> | 图片：{{ master_w }}×{{ master_h }} | thumb：{{ tw }}×{{ th }} | 初始：({{ dx }},{{ dy }})</p>
 
   {% if captcha_type == 'slide' %}
-  <div class="captcha-area">
-    <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha">
-  </div>
-  <div class="slider-track" id="slider-track">
-    <div class="slider-fill" id="slider-fill"></div>
-    <div class="slider-handle" id="slider-handle">▶</div>
-  </div>
+    <p class="info hint">拖动图块到背景缺口位置，然后提交。</p>
+    <div class="captcha-wrap"><div class="captcha-area" id="captcha-area">
+      <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
+      {% if thumb_b64 %}<img class="captcha-thumb" id="captcha-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb" draggable="false" style="left:{{ dx }}px; top:{{ dy }}px; width:{{ tw }}px; height:{{ th }}px;">{% endif %}
+    </div></div>
+
+  {% elif captcha_type == 'rotate' %}
+    <p class="info hint">拖动角度滑条，让图形旋转到正确方向，然后提交。</p>
+    <div class="captcha-wrap"><div class="rotate-stage">
+      <img class="rotate-master" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
+      {% if thumb_b64 %}<img class="rotate-thumb" id="rotate-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb" draggable="false">{% endif %}
+    </div></div>
+    <input class="range" id="rotate-range" type="range" min="0" max="359" value="0" step="1">
+
+  {% elif captcha_type == 'click' %}
+    <p class="info hint">按提示图在背景图上点选；支持多点，按点击顺序提交。</p>
+    {% if thumb_b64 %}<img class="thumb-preview" src="data:image/png;base64,{{ thumb_b64 }}" alt="click prompt" style="width:{{ tw }}px; height:{{ th }}px;">{% endif %}
+    <div class="captcha-wrap"><div class="captcha-area" id="captcha-area">
+      <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
+    </div></div>
+    <button class="btn btn-subtle" type="button" onclick="undoClick()">↩️ 撤销上一个点</button>
+
   {% else %}
-  <div class="captcha-area" style="touch-action:none;">
-    <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha">
-    <img class="captcha-thumb" id="captcha-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb"
-         style="left:{{ dx }}px; top:{{ dy }}px; width:{{ tw }}px; height:{{ th }}px;">
-  </div>
+    <p class="info hint">当前类型暂不支持，请重新获取。</p>
   {% endif %}
 
   <div class="status-bar">
-    拖动距离：<span class="coord" id="drag-info">0px</span><br>
-    提交坐标：<span class="coord" id="coord-info">({{ dx }},{{ dy }})</span>
+    当前操作：<span class="coord" id="action-info">尚未操作</span><br>
+    提交答案：<span class="coord" id="answer-info">-</span>
   </div>
 
-  <button class="btn" id="submit-btn" onclick="submitAnswer()">✅ 提交坐标</button>
+  <button class="btn" id="submit-btn" onclick="submitAnswer()" disabled>先完成验证码操作</button>
   <p class="expire-warn" id="expire-timer"></p>
+
+  <details>
+    <summary>调试信息（用于核对原始字段）</summary>
+    <pre>{{ debug_json }}</pre>
+  </details>
+</div>
 
 {% else %}
 <div class="card" style="text-align:center">
@@ -131,14 +155,28 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 <script>
 const capType = "{{ captcha_type }}";
 const dx = {{ dx }}, dy = {{ dy }}, tw = {{ tw }}, th = {{ th }};
+const masterW = {{ master_w }}, masterH = {{ master_h }};
 const account = "{{ account }}";
-let hasDragged = false, dragDist = 0, dragDistY = 0;
+let answer = "";
+
+function setAnswer(value, label) {
+  answer = String(value || "");
+  const btn = document.getElementById('submit-btn');
+  const ans = document.getElementById('answer-info');
+  const act = document.getElementById('action-info');
+  if (ans) ans.textContent = answer || '-';
+  if (act) act.textContent = label || answer || '尚未操作';
+  if (btn) {
+    btn.disabled = !answer;
+    btn.textContent = answer ? '✅ 提交答案' : '先完成验证码操作';
+  }
+}
 
 function showTimer(sec) {
   const el = document.getElementById('expire-timer');
   if (!el) return;
   const tick = () => {
-    if (sec <= 0) { el.textContent = '⚠️ 验证码可能已过期，请刷新'; return; }
+    if (sec <= 0) { el.textContent = '⚠️ 验证码可能已过期，请重新触发签到'; return; }
     const m = Math.floor(sec / 60), s = sec % 60;
     el.textContent = `⏰ 剩余 ${m}:${String(s).padStart(2,'0')} 有效`;
     sec--;
@@ -146,41 +184,39 @@ function showTimer(sec) {
   };
   tick();
 }
-showTimer(240);
+showTimer({{ expire_seconds }});
 
 if (capType === 'slide') {
-  const handle = document.getElementById('slider-handle');
-  const track = document.getElementById('slider-track');
-  const fill = document.getElementById('slider-fill');
-  const dragInfo = document.getElementById('drag-info');
-  const coordInfo = document.getElementById('coord-info');
-  const maxDist = 300;
-  let currentLeft = 0, startX = 0;
-
-  function updateUI(left) {
-    handle.style.left = left + 'px';
-    fill.style.width = (left / (maxDist - 60) * 100) + '%';
-    const gapX = dx + Math.round(left);
-    dragDist = Math.round(left);
-    dragInfo.textContent = dragDist + 'px';
-    coordInfo.textContent = '(gap_x=' + gapX + ', y=' + dy + ')';
+  const area = document.getElementById('captcha-area');
+  const thumb = document.getElementById('captcha-thumb');
+  let left = dx, startX = 0;
+  function clamp(v, min, max) { return Math.max(min, Math.min(v, max)); }
+  function render() {
+    if (!thumb) return;
+    thumb.style.left = left + 'px';
+    thumb.style.top = dy + 'px';
+    const x = Math.round(left), y = Math.round(dy);
+    setAnswer(x + ',' + y, '图块位置：(' + x + ',' + y + ')');
   }
-
+  function point(e) {
+    const t = e.touches ? e.touches[0] : e;
+    const r = area.getBoundingClientRect();
+    return { x: (t.clientX - r.left) * masterW / r.width };
+  }
   function onStart(e) {
+    if (!thumb) return;
     e.preventDefault();
-    e.stopPropagation();
-    startX = (e.touches ? e.touches[0].clientX : e.clientX) - currentLeft;
+    const p = point(e); startX = p.x - left;
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onEnd);
-    document.addEventListener('touchmove', onMove, {passive: false});
+    document.addEventListener('touchmove', onMove, {passive:false});
     document.addEventListener('touchend', onEnd);
   }
   function onMove(e) {
     e.preventDefault();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    currentLeft = Math.max(0, Math.min(cx - startX, maxDist - 60));
-    hasDragged = true;
-    updateUI(currentLeft);
+    const p = point(e);
+    left = clamp(p.x - startX, 0, masterW - tw);
+    render();
   }
   function onEnd() {
     document.removeEventListener('mousemove', onMove);
@@ -188,95 +224,100 @@ if (capType === 'slide') {
     document.removeEventListener('touchmove', onMove);
     document.removeEventListener('touchend', onEnd);
   }
-  handle.addEventListener('mousedown', onStart);
-  handle.addEventListener('touchstart', onStart, {passive: false});
-  track.addEventListener('click', function(e) {
-    if (e.target === track || e.target === fill) {
-      currentLeft = Math.max(0, Math.min(e.offsetX - 30, maxDist - 60));
-      hasDragged = true;
-      updateUI(currentLeft);
-    }
+  if (thumb) {
+    thumb.addEventListener('mousedown', onStart);
+    thumb.addEventListener('touchstart', onStart, {passive:false});
+  }
+}
+
+if (capType === 'rotate') {
+  const range = document.getElementById('rotate-range');
+  const thumb = document.getElementById('rotate-thumb');
+  function renderAngle(markReady) {
+    const angle = parseInt(range.value || '0', 10);
+    if (thumb) thumb.style.transform = 'rotate(' + angle + 'deg)';
+    if (markReady) setAnswer(String(angle), '旋转角度：' + angle + '°');
+  }
+  if (range) {
+    range.addEventListener('input', function() { renderAngle(true); });
+    renderAngle(false);
+  }
+}
+
+const clickPoints = [];
+function renderClickPoints() {
+  const area = document.getElementById('captcha-area');
+  if (!area) return;
+  area.querySelectorAll('.click-dot').forEach(e => e.remove());
+  clickPoints.forEach((p, i) => {
+    const dot = document.createElement('div');
+    dot.className = 'click-dot'; dot.textContent = String(i + 1);
+    dot.style.left = p.x + 'px'; dot.style.top = p.y + 'px';
+    area.appendChild(dot);
+  });
+  const ans = clickPoints.map(p => p.x + ',' + p.y).join(',');
+  setAnswer(ans, clickPoints.length ? '已点 ' + clickPoints.length + ' 个位置' : '尚未点选');
+}
+function undoClick() {
+  if (capType !== 'click') return;
+  clickPoints.pop(); renderClickPoints();
+}
+if (capType === 'click') {
+  const area = document.getElementById('captcha-area');
+  if (area) area.addEventListener('click', function(e) {
+    const r = area.getBoundingClientRect();
+    const x = Math.round((e.clientX - r.left) * masterW / r.width);
+    const y = Math.round((e.clientY - r.top) * masterH / r.height);
+    clickPoints.push({x, y}); renderClickPoints();
   });
 }
 
-if (capType === 'drag') {
-  const thumb = document.getElementById('captcha-thumb');
-  const dragInfo = document.getElementById('drag-info');
-  const coordInfo = document.getElementById('coord-info');
-  let origLeft = dx, origTop = dy, startX = 0, startY = 0;
-  const maxX = 300 - tw, maxY = 220 - th;
-
-  function updateUI(left, top) {
-    thumb.style.left = left + 'px';
-    thumb.style.top = top + 'px';
-    dragDist = left - dx;
-    dragDistY = top - dy;
-    dragInfo.textContent = 'Δ(' + dragDist + ',' + dragDistY + ')';
-    coordInfo.textContent = '(gap=' + left + ',' + top + ')';
-  }
-  function onStart(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    startX = (e.touches ? e.touches[0].clientX : e.clientX) - origLeft;
-    startY = (e.touches ? e.touches[0].clientY : e.clientY) - origTop;
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onEnd);
-    document.addEventListener('touchmove', onMove, {passive: false});
-    document.addEventListener('touchend', onEnd);
-  }
-  function onMove(e) {
-    e.preventDefault();
-    origLeft = Math.max(0, Math.min((e.touches ? e.touches[0].clientX : e.clientX) - startX, maxX));
-    origTop = Math.max(0, Math.min((e.touches ? e.touches[0].clientY : e.clientY) - startY, maxY));
-    hasDragged = true;
-    updateUI(origLeft, origTop);
-  }
-  function onEnd() {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onEnd);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onEnd);
-  }
-  thumb.addEventListener('mousedown', onStart);
-  thumb.addEventListener('touchstart', onStart, {passive: false});
-}
-
 async function submitAnswer() {
+  if (!answer) return;
   const btn = document.getElementById('submit-btn');
   btn.disabled = true;
   btn.textContent = '提交中...';
-
-  let gapX, gapY;
-  if (capType === 'slide') {
-    gapX = dx + dragDist;
-    gapY = dy;
-  } else {
-    gapX = dx + dragDist;
-    gapY = dy + dragDistY;
-  }
-  const ans = gapX + ',' + gapY;
-
   try {
-    const r = await fetch('/' + account + '/submit', {
+    const r = await fetch('/' + encodeURIComponent(account) + '/submit', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: 'gap_x=' + gapX + '&gap_y=' + gapY
+      body: 'answer=' + encodeURIComponent(answer)
     });
     if (r.ok) {
       const t = await r.text();
       document.body.innerHTML = t;
     } else {
-      btn.textContent = '提交失败，重试';
-      btn.disabled = false;
+      btn.textContent = '提交失败，重试'; btn.disabled = false;
     }
   } catch(e) {
-    btn.textContent = '网络错误，重试';
-    btn.disabled = false;
+    btn.textContent = '网络错误，重试'; btn.disabled = false;
   }
 }
 </script>
 </body>
 </html>"""
+
+def _render_captcha_template(**kwargs):
+    defaults = {
+        "captcha_ready": False,
+        "solved": False,
+        "error": None,
+        "answer": "",
+        "captcha_type": "",
+        "dx": 0,
+        "dy": 0,
+        "tw": 64,
+        "th": 64,
+        "master_w": 300,
+        "master_h": 220,
+        "master_b64": "",
+        "thumb_b64": "",
+        "expire_seconds": 300,
+        "debug_json": "{}",
+    }
+    defaults.update(kwargs)
+    return render_template_string(CAPTCHA_HTML, **defaults)
+
 
 # ─── Flask App Factory ────────────────────────────────────
 def create_app():
@@ -291,28 +332,43 @@ def create_app():
         with _sessions_lock:
             session = _captcha_sessions.get(account_id)
         if not session:
-            return render_template_string(CAPTCHA_HTML, account=account_id, captcha_ready=False,
-                                          solved=False, error="会话不存在或已过期，请重新获取验证码")
+            return _render_captcha_template(account=account_id, captcha_ready=False,
+                                            solved=False, error="会话不存在或已过期，请重新获取验证码")
         if session.get("solved"):
-            return render_template_string(CAPTCHA_HTML, account=account_id, captcha_ready=False,
-                                          solved=True, answer=session.get("answer", ""))
+            return _render_captcha_template(account=account_id, captcha_ready=False,
+                                            solved=True, answer=session.get("answer", ""))
         if not session.get("captcha_data"):
-            return render_template_string(CAPTCHA_HTML, account=account_id, captcha_ready=False, solved=False)
+            return _render_captcha_template(account=account_id, captcha_ready=False, solved=False)
 
         with _sessions_lock:
             data = session.get("captcha_data", {})
-        return render_template_string(
-            CAPTCHA_HTML,
+            created_at = session.get("created_at", time.time())
+        debug = {
+            "type": data.get("type"),
+            "display_x": data.get("display_x"),
+            "display_y": data.get("display_y"),
+            "thumb_width": data.get("thumb_width"),
+            "thumb_height": data.get("thumb_height"),
+            "master_width": data.get("master_width"),
+            "master_height": data.get("master_height"),
+            "has_master_image_base64": bool(data.get("master_b64")),
+            "has_thumb_image_base64": bool(data.get("thumb_b64")),
+        }
+        return _render_captcha_template(
             account=account_id,
             captcha_ready=True,
             solved=False,
             captcha_type=data.get("type", "?"),
-            dx=data.get("display_x", 0),
-            dy=data.get("display_y", 0),
-            tw=data.get("thumb_width", 64),
-            th=data.get("thumb_height", 64),
+            dx=int(data.get("display_x") or 0),
+            dy=int(data.get("display_y") or 0),
+            tw=int(data.get("thumb_width") or 64),
+            th=int(data.get("thumb_height") or 64),
+            master_w=int(data.get("master_width") or 300),
+            master_h=int(data.get("master_height") or 220),
             master_b64=data.get("master_b64", ""),
             thumb_b64=data.get("thumb_b64", ""),
+            expire_seconds=max(0, int(300 - (time.time() - created_at))),
+            debug_json=json.dumps(debug, ensure_ascii=False, indent=2),
         )
 
     @app.route("/<path:account_id>/submit", methods=["POST"])
@@ -320,18 +376,18 @@ def create_app():
         with _sessions_lock:
             session = _captcha_sessions.get(account_id)
             if not session or session.get("solved"):
-                return render_template_string(CAPTCHA_HTML, account=account_id, solved=True,
-                                              error="会话已过期")
+                return _render_captcha_template(account=account_id, solved=True,
+                                                error="会话已过期")
 
-            gap_x = int(request.form.get("gap_x", 0))
-            gap_y = int(request.form.get("gap_y", 0))
-            answer = f"{gap_x},{gap_y}"
+            answer = str(request.form.get("answer") or "").strip()
+            if not answer:
+                return "missing answer", 400
             session["answer"] = answer
             session["solved"] = True
             session["solved_at"] = time.time()
 
         logger.info(f"[SehuatangCaptcha] Account {account_id}: user submitted {answer}")
-        return render_template_string(CAPTCHA_HTML, account=account_id, solved=True, answer=answer)
+        return _render_captcha_template(account=account_id, solved=True, answer=answer)
 
     return app
 
@@ -346,19 +402,12 @@ def init_session(account_id: str):
         }
 
 
-def destroy_session(account_id: str):
+def destroy_session(account_id: str, destroy_fs: bool = True):
     """Clean up a captcha session."""
     with _sessions_lock:
         session = _captcha_sessions.pop(account_id, None)
-    if session and session.get("fs_sid"):
-        try:
-            requests.post(
-                FS_URL_TEMPLATE.format(flaresolverr_url=_get_fs_url()),
-                json={"cmd": "sessions.destroy", "session": session["fs_sid"]},
-                timeout=5,
-            )
-        except Exception:
-            pass
+    if destroy_fs and session and session.get("fs_sid"):
+        fs_destroy_session(session["fs_sid"])
 
 
 def set_captcha_data(account_id: str, data: dict, fs_sid: str):
@@ -378,14 +427,13 @@ def is_solved(account_id: str) -> bool:
         return bool(session and session.get("solved"))
 
 
-def get_answer(account_id: str) -> tuple:
-    """Get the user's answer. Returns (gap_x, gap_y)."""
+def get_answer(account_id: str) -> str:
+    """Get the user's raw answer string."""
     with _sessions_lock:
         session = _captcha_sessions.get(account_id)
         if session and session.get("answer"):
-            parts = session["answer"].split(",")
-            return int(parts[0]), int(parts[1])
-    return 0, 0
+            return str(session["answer"])
+    return ""
 
 
 def is_expired(account_id: str, timeout: int = 300) -> bool:
@@ -414,6 +462,13 @@ def set_fs_url(url: str):
 def set_proxy_url(url: str):
     global _proxy_url_cache
     _proxy_url_cache = url.strip()
+
+
+def set_base_url(url: str):
+    """Set target site base URL, e.g. https://sehuatang.net."""
+    global BASE_URL
+    clean = (url or "").strip().rstrip("/")
+    BASE_URL = clean or "https://sehuatang.net"
 
 
 def _proxy_param() -> dict | None:
@@ -457,6 +512,20 @@ def fs_create_session() -> str:
     return d.get("session", "") if d.get("status") == "ok" else ""
 
 
+def fs_destroy_session(fs_sid: str):
+    """Destroy a FlareSolverr session, ignoring cleanup errors."""
+    if not fs_sid:
+        return
+    try:
+        requests.post(
+            FS_URL_TEMPLATE.format(flaresolverr_url=_get_fs_url()),
+            json={"cmd": "sessions.destroy", "session": fs_sid},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def fs_get(fs_sid: str, url: str, cookies: list) -> str:
     return fs_call(fs_sid, {"cmd": "request.get", "url": url, "maxTimeout": 60000}, cookies).get("html", "")
 
@@ -490,30 +559,54 @@ def extract_json(html: str) -> dict:
 
 
 # ─── Sign-in flow ─────────────────────────────────────────
-def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int = 8) -> dict | None:
-    """Fetch a slide or drag captcha from sehuatang."""
-    for attempt in range(max_retries):
-        if attempt > 0:
-            time.sleep(3)
+def _strip_data_uri(value: str) -> str:
+    if value and "," in value:
+        return value.split(",", 1)[1]
+    return value or ""
+
+
+def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | None = None,
+                              max_wait_seconds: int = 300) -> dict | None:
+    """Fetch a supported captcha from sehuatang.
+
+    Supported manual relay types: slide, rotate, click. Drag is intentionally skipped.
+    Retries use a 10–15s jitter to avoid hammering the captcha endpoint, with a total wait cap.
+    """
+    supported_types = {"slide", "rotate", "click"}
+    attempt = 0
+    deadline = time.time() + max(1, int(max_wait_seconds or 300))
+    while (max_retries is None or attempt < max_retries) and time.time() < deadline:
+        attempt += 1
+        if attempt > 1:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            delay = min(random.uniform(10, 15), remaining)
+            logger.debug(f"[SehuatangCaptcha] Waiting {delay:.1f}s before captcha retry")
+            time.sleep(delay)
         html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies)
         cap = extract_json(html)
+        code = cap.get("code")
+        if code == 429:
+            logger.warning("[SehuatangCaptcha] Captcha endpoint returned 429; stop retrying this account")
+            return None
         data = cap.get("data", {})
         if not data or not data.get("type"):
+            logger.debug(f"[SehuatangCaptcha] Attempt {attempt}: no captcha type, code={code}")
             continue
         cap_type = data["type"]
-        if cap_type in ("slide", "drag"):
-            # Extract base64 images
-            master_b64 = data.get("master_image_base64", "")
-            if "," in master_b64:
-                master_b64 = master_b64.split(",", 1)[1]
-            thumb_b64 = data.get("thumb_image_base64", "")
-            if thumb_b64 and "," in thumb_b64:
-                thumb_b64 = thumb_b64.split(",", 1)[1]
-            data["master_b64"] = master_b64
-            data["thumb_b64"] = thumb_b64
-            logger.debug(f"[SehuatangCaptcha] Got {cap_type} after {attempt+1} attempt(s)")
+        if cap_type in supported_types:
+            data["master_b64"] = _strip_data_uri(data.get("master_image_base64", ""))
+            data["thumb_b64"] = _strip_data_uri(data.get("thumb_image_base64", ""))
+            logger.info(
+                f"[SehuatangCaptcha] Got supported {cap_type} after {attempt} attempt(s); "
+                f"master={data.get('master_width')}x{data.get('master_height')} "
+                f"thumb={data.get('thumb_width')}x{data.get('thumb_height')} "
+                f"display=({data.get('display_x')},{data.get('display_y')})"
+            )
             return data
-        logger.debug(f"[SehuatangCaptcha] Attempt {attempt + 1}: got {cap_type}, retrying...")
+        logger.info(f"[SehuatangCaptcha] Attempt {attempt}: got unsupported {cap_type}, retrying with jitter")
+    logger.warning(f"[SehuatangCaptcha] Captcha fetch timed out after {max_wait_seconds}s")
     return None
 
 
@@ -526,16 +619,11 @@ def check_sign_status(fs_sid: str, cookies: list) -> tuple:
     return False, "N/A"
 
 
-def submit_check(fs_sid: str, gap_x: int, gap_y: int, cap_type: str,
-                 display_y: int, cookies: list) -> tuple:
-    """Submit captcha check. Returns (ok, result_dict)."""
-    if cap_type == "slide":
-        answer = f"{gap_x},{display_y}"
-    else:
-        answer = f"{gap_x},{gap_y}"
+def submit_check(fs_sid: str, answer: str, cap_type: str, cookies: list) -> tuple:
+    """Submit raw captcha answer. Returns (ok, result_dict)."""
     result = fs_post(fs_sid, f"{BASE_URL}/misc.php?mod=captcha&action=check", answer, cookies)
     ok = result.get("data") == "ok"
-    logger.info(f"[SehuatangCaptcha] Check {answer}: {'OK' if ok else result.get('data','?')}")
+    logger.info(f"[SehuatangCaptcha] Check {cap_type} answer={answer}: {'OK' if ok else result.get('data','?')}")
     return ok, result
 
 
@@ -543,6 +631,9 @@ def complete_signin(fs_sid: str, cookies: list) -> dict:
     """Complete the sign-in after captcha passes."""
     html = fs_get(fs_sid, f"{BASE_URL}/plugin.php?id=dd_sign&ac=sign_v2", cookies)
     return extract_json(html)
+
+
+app = create_app() if Flask is not None else None
 
 
 # ─── Embedded server ──────────────────────────────────────
