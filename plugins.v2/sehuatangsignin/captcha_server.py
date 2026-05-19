@@ -48,9 +48,14 @@ FS_URL_TEMPLATE = "{flaresolverr_url}/v1"
 # memory spaces. The store contains captcha images/session ids, not account cookies.
 _captcha_sessions: dict = {}
 _sessions_lock = threading.Lock()
-_SESSION_STORE_PATH = os.environ.get(
-    "SEHUATANG_CAPTCHA_SESSION_STORE",
-    os.path.join(tempfile.gettempdir(), "sehuatangsignin_captcha_sessions.json"),
+_DEFAULT_SESSION_STORE_PATH = os.path.join(tempfile.gettempdir(), "sehuatangsignin_captcha_sessions.json")
+_SESSION_STORE_PATH = os.environ.get("SEHUATANG_CAPTCHA_SESSION_STORE", _DEFAULT_SESSION_STORE_PATH)
+# Compatibility bridge: older/stale relay instances may still read the default
+# temp-file store. Mirror session state there so producer and relay do not split-brain
+# during plugin hot reloads or reverse-proxy target drift.
+_LEGACY_SESSION_STORE_PATH = os.environ.get(
+    "SEHUATANG_CAPTCHA_LEGACY_SESSION_STORE",
+    _DEFAULT_SESSION_STORE_PATH,
 )
 _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
 _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
@@ -98,6 +103,31 @@ def site_captcha_lock():
         yield
 
 
+def _session_store_paths() -> list[str]:
+    paths = []
+    for path in (_SESSION_STORE_PATH, _LEGACY_SESSION_STORE_PATH):
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _merge_session(target: dict, key: str, incoming: dict):
+    current = target.get(key)
+    if not isinstance(current, dict):
+        target[key] = incoming
+        return
+    # Prefer whichever side has the user's answer; this lets a stale/default relay
+    # write solved=True while the plugin polls the primary plugin-data store.
+    if incoming.get("solved") and not current.get("solved"):
+        target[key] = incoming
+        return
+    if float(incoming.get("solved_at") or 0) > float(current.get("solved_at") or 0):
+        target[key] = incoming
+        return
+    if float(incoming.get("created_at") or 0) > float(current.get("created_at") or 0) and not current.get("solved"):
+        target[key] = incoming
+
+
 def _prune_sessions_unlocked(now: float | None = None) -> bool:
     """Drop stale sessions left behind by crashes/reloads to keep the store bounded."""
     now = now or time.time()
@@ -128,32 +158,45 @@ def _destroy_fs_session_later(fs_sid: str | None):
 
 def _load_sessions_unlocked() -> dict:
     global _captcha_sessions
-    try:
-        with open(_SESSION_STORE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            _captcha_sessions = data
-            if _prune_sessions_unlocked():
-                _save_sessions_unlocked()
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        logger.warning(f"[SehuatangCaptcha] Failed to load session store: {e}")
+    loaded = {}
+    changed = False
+    for path in _session_store_paths():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    if isinstance(value, dict):
+                        before = loaded.get(key)
+                        _merge_session(loaded, key, value)
+                        changed = changed or before != loaded.get(key)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"[SehuatangCaptcha] Failed to load session store {path}: {e}")
+    if loaded:
+        changed = changed or loaded != _captcha_sessions
+        _captcha_sessions = loaded
+    if _prune_sessions_unlocked():
+        changed = True
+    if changed:
+        _save_sessions_unlocked()
     return _captcha_sessions
 
 
 def _save_sessions_unlocked():
     _prune_sessions_unlocked()
-    try:
-        directory = os.path.dirname(_SESSION_STORE_PATH)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        tmp_path = f"{_SESSION_STORE_PATH}.{os.getpid()}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(_captcha_sessions, f, ensure_ascii=False)
-        os.replace(tmp_path, _SESSION_STORE_PATH)
-    except Exception as e:
-        logger.warning(f"[SehuatangCaptcha] Failed to save session store: {e}")
+    for path in _session_store_paths():
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            tmp_path = f"{path}.{os.getpid()}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(_captcha_sessions, f, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except Exception as e:
+            logger.warning(f"[SehuatangCaptcha] Failed to save session store {path}: {e}")
 
 # ─── HTML Template ─────────────────────────────────────────
 CAPTCHA_HTML = """<!DOCTYPE html>
@@ -442,6 +485,22 @@ def create_app():
     if Flask is None:
         raise RuntimeError("Flask is not installed. Run: pip install flask")
     app = Flask(__name__)
+
+    @app.route("/__sht_health")
+    def relay_health():
+        with _sessions_lock, _session_store_lock():
+            sessions = _load_sessions_unlocked()
+            session_count = len(sessions)
+            sample_keys = list(sessions.keys())[:10]
+        return {
+            "ok": True,
+            "plugin": "SehuatangSignin",
+            "version": "0.1.12",
+            "sessionStorePath": _SESSION_STORE_PATH,
+            "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
+            "sessionCount": session_count,
+            "sampleSessionKeys": sample_keys,
+        }
 
     @app.route("/<path:account_id>")
     def captcha_page(account_id):

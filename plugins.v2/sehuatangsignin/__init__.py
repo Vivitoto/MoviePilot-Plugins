@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.11"
+    plugin_version = "0.1.12"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -141,7 +141,9 @@ class SehuatangSignin(_PluginBase):
                 self._public_base_url = str(config.get("public_base_url") or "").strip().rstrip("/")
                 self._parse_accounts()
 
-            # Start embedded captcha server
+            # Start embedded captcha server. Stop first to avoid keeping a stale
+            # relay thread after plugin config saves / hot reloads.
+            stop_server()
             data_path = self.get_data_path()
             set_session_store_path(str(data_path / "captcha_sessions.json"))
             set_base_url(self._base_url)
