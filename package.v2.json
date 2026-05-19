@@ -34,5 +34,17 @@
       "v0.0.8": "修复奖励提取：已签到/签到完成分支不再丢弃 reward；增加更多奖励正则 pattern（积分/威望/车票 +数字 格式）和兜底 +数字 提取；增加提取失败时的 debug 日志。",
       "v0.0.7": "修复已签到误判：将\"今日已签到\"文本判断提前到 misigntime cookie 之前，增加非法字符/重复请求识别；修复用户信息解析失败：增加多 pattern 兜底和调试日志；放宽奖励提取正则覆盖更多格式。"
     }
+  },
+  "sehuatangsignin": {
+    "name": "色花堂签到",
+    "description": "FlareSolverr + 人工辅助验证码。多账号、企微通知验证码链接、内嵌 Relay Server。",
+    "labels": "签到,自动化,消息通知,验证码",
+    "version": "0.1.0",
+    "author": "Vivitoto",
+    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
+    "level": 1,
+    "history": {
+      "v0.1.0": "首个版本：FlareSolverr 绕过 Cloudflare + 多账号支持 + 企微通知验证码 Relay URL + 内嵌 Flask HTTP Server 监听验证码提交 + 支持反代公网地址。"
+    }
   }
 }
