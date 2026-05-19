@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.15"
+    plugin_version = "0.1.16"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22

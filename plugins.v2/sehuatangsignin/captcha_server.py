@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "0.1.15",
+            "version": "0.1.16",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -818,7 +818,7 @@ def _merge_response_cookiejar(cookies: list, jar):
 
 
 def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
-    """Fallback for sites that reject FlareSolverr request.post but accept normal HTTP POST."""
+    """Browser-like direct POST for captcha check using current cookies/proxy/UA."""
     session = requests.Session()
     proxy = _proxy_url_cache.strip()
     if proxy:
@@ -845,6 +845,14 @@ def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
 
 
 def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
+    # Check endpoint is sensitive to browser/XHR context. Direct requests with
+    # FS-updated cookies has proven closer than FlareSolverr request.post, which
+    # can trigger safe_gate and invalidate the current captcha state.
+    direct_result = _direct_check_post(fs_sid, url, body, cookies)
+    if direct_result.get("data") != "direct_error":
+        logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
+        return direct_result
+
     r = fs_call(fs_sid, {
         "cmd": "request.post",
         "url": url,
@@ -855,10 +863,7 @@ def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
     html = r.get("html", "")
     result = _parse_check_html(html)
     result.setdefault("via", "flaresolverr")
-    if result.get("data") == "safe_gate":
-        direct_result = _direct_check_post(fs_sid, url, body, cookies)
-        logger.info(f"[SehuatangCaptcha] FlareSolverr check hit safe_gate; direct fallback: {direct_result.get('data')}")
-        return direct_result
+    logger.info(f"[SehuatangCaptcha] Direct check failed; FlareSolverr check result: {result.get('data')}")
     return result
 
 

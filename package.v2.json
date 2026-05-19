@@ -37,17 +37,17 @@
     "name": "98签到自用",
     "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
     "labels": "签到,手动验证,消息通知,验证码",
-    "version": "0.1.15",
+    "version": "0.1.16",
     "author": "Vivitoto",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
     "level": 1,
     "history": {
+      "v0.1.16": "调整验证码 check 顺序：优先使用 direct requests 携带 FS 更新后的 cookies/代理/userAgent 提交，避免先走 FlareSolverr request.post 触发 safe_gate 后污染当前验证码状态；仅 direct 网络失败时回退 FS POST。",
       "v0.1.15": "新增验证码 check 兜底链路：当 FlareSolverr request.post 返回 safe_gate 时，使用同一 cookies、代理和 userAgent 通过 direct requests 再提交一次 text/plain check，用于规避 FS POST 与浏览器 XHR 行为差异。",
       "v0.1.14": "进一步复刻浏览器验证码 check 请求：记录 FlareSolverr 会话 userAgent 并用于 check POST，补齐 Accept-Language 与 Sec-Fetch-* 请求头；safe_gate 返回时立即终止当前账号，不再冷却后重试。",
       "v0.1.13": "修复验证码 check 请求上下文：对照 HAR 为 check POST 补齐 Origin 与 Accept 请求头；识别 safe gate HTML 返回并作为安全入口拦截终止当前账号，避免误判为普通验证码错误后继续重试触发风控。",
       "v0.1.12": "增强 relay 兼容与诊断：验证码会话同时镜像/合并插件数据目录和旧默认 session store，兼容热重载或反代命中旧 relay 实例；保存/热重载时先停止旧 relay 再启动，并新增 /__sht_health 健康检查接口用于确认公网命中的 relay 版本和 session store。",
-      "v0.1.11": "修复公网验证码链接刚打开即提示会话不存在：验证码会话写入 MoviePilot 插件数据目录，同时镜像/合并旧默认 session store，兼容热重载或反代命中旧 relay 实例；一次验证码一个随机会话 key，增加跨进程文件锁/站点验证码接口锁、24小时残留清理、FS 残留会话清理、可停止 relay server 和健康检查接口。",
-      "v0.1.10": "修复验证码提交链路：FlareSolverr 返回 cookies 回写到会话，避免 check 使用旧验证码状态；slide/click 坐标以原图为基准；验证码 fetch/check 共用全局锁，check 失败后全局冷却 10-15 秒，降低多账号并发 429 风险。"
+      "v0.1.11": "修复公网验证码链接刚打开即提示会话不存在：验证码会话写入 MoviePilot 插件数据目录，同时镜像/合并旧默认 session store，兼容热重载或反代命中旧 relay 实例；一次验证码一个随机会话 key，增加跨进程文件锁/站点验证码接口锁、24小时残留清理、FS 残留会话清理、可停止 relay server 和健康检查接口。"
     }
   }
 }
