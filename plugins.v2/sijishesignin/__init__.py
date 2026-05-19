@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -119,7 +119,6 @@ class SijisheSignIn(_PluginBase):
             "cmd": "/sijishe_signin",
             "event": EventType.PluginAction,
             "desc": "执行司机社签到",
-            "category": "站点",
             "data": {"action": "sijishe_signin"}
         }]
 

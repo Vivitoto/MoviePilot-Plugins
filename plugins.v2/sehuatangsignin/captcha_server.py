@@ -3,11 +3,14 @@ Sehuatang captcha relay UI server - embedded Flask app for MP plugin.
 Started on-demand, supports multi-account via URL path.
 """
 import base64
+import contextlib
 import json
+import os
 import random
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -40,8 +43,117 @@ FS_URL_TEMPLATE = "{flaresolverr_url}/v1"
 
 # ─── Session state ────────────────────────────────────────
 # Keyed by account_id: {fs_sid, captcha_data, solved, answer, ...}
+# Keep a disk-backed copy because MP/plugin reloads or reverse-proxy targets can
+# make the notification producer and HTTP relay handler run in different Python
+# memory spaces. The store contains captcha images/session ids, not account cookies.
 _captcha_sessions: dict = {}
 _sessions_lock = threading.Lock()
+_SESSION_STORE_PATH = os.environ.get(
+    "SEHUATANG_CAPTCHA_SESSION_STORE",
+    os.path.join(tempfile.gettempdir(), "sehuatangsignin_captcha_sessions.json"),
+)
+_SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
+_SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
+try:
+    _SESSION_MAX_AGE_SECONDS = max(
+        3600,
+        int(os.environ.get("SEHUATANG_CAPTCHA_SESSION_MAX_AGE_SECONDS", "86400")),
+    )
+except ValueError:
+    _SESSION_MAX_AGE_SECONDS = 86400
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Linux fallback
+    fcntl = None
+
+
+@contextlib.contextmanager
+def _file_lock(path: str):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    lock_file = open(path, "a+", encoding="utf-8")
+    try:
+        if fcntl:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        if fcntl:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
+@contextlib.contextmanager
+def _session_store_lock():
+    """Cross-process lock for the disk-backed captcha session store."""
+    with _file_lock(_SESSION_LOCK_PATH):
+        yield
+
+
+@contextlib.contextmanager
+def site_captcha_lock():
+    """Cross-process throttle lock for sehuatang captcha fetch/check endpoint."""
+    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
+        yield
+
+
+def _prune_sessions_unlocked(now: float | None = None) -> bool:
+    """Drop stale sessions left behind by crashes/reloads to keep the store bounded."""
+    now = now or time.time()
+    changed = False
+    for account_id, session in list(_captcha_sessions.items()):
+        created_at = 0
+        if isinstance(session, dict):
+            created_at = float(session.get("created_at") or 0)
+        if not created_at or now - created_at > _SESSION_MAX_AGE_SECONDS:
+            fs_sid = session.get("fs_sid") if isinstance(session, dict) else None
+            _captcha_sessions.pop(account_id, None)
+            _destroy_fs_session_later(fs_sid)
+            changed = True
+    return changed
+
+
+def _destroy_fs_session_later(fs_sid: str | None):
+    """Best-effort cleanup for stale FlareSolverr sessions without blocking store locks."""
+    if not fs_sid:
+        return
+    try:
+        if not globals().get("_fs_url_cache"):
+            return
+        threading.Thread(target=fs_destroy_session, args=(fs_sid,), daemon=True).start()
+    except Exception:
+        pass
+
+
+def _load_sessions_unlocked() -> dict:
+    global _captcha_sessions
+    try:
+        with open(_SESSION_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _captcha_sessions = data
+            if _prune_sessions_unlocked():
+                _save_sessions_unlocked()
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"[SehuatangCaptcha] Failed to load session store: {e}")
+    return _captcha_sessions
+
+
+def _save_sessions_unlocked():
+    _prune_sessions_unlocked()
+    try:
+        directory = os.path.dirname(_SESSION_STORE_PATH)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        tmp_path = f"{_SESSION_STORE_PATH}.{os.getpid()}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(_captcha_sessions, f, ensure_ascii=False)
+        os.replace(tmp_path, _SESSION_STORE_PATH)
+    except Exception as e:
+        logger.warning(f"[SehuatangCaptcha] Failed to save session store: {e}")
 
 # ─── HTML Template ─────────────────────────────────────────
 CAPTCHA_HTML = """<!DOCTYPE html>
@@ -49,7 +161,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>98 验证码 - {{ account }}</title>
+<title>98 验证码 - {{ display_account or account }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -85,7 +197,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 <body>
 <div class="container">
 <h1>🔐 98 验证码</h1>
-<p class="account-tag">账号：{{ account }}</p>
+<p class="account-tag">账号：{{ display_account or account }}</p>
 
 {% if solved %}
 <div class="success-box">
@@ -156,7 +268,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 const capType = "{{ captcha_type }}";
 const dx = {{ dx }}, dy = {{ dy }}, tw = {{ tw }}, th = {{ th }};
 const masterW = {{ master_w }}, masterH = {{ master_h }};
-const account = "{{ account }}";
+const account = "{{ route_account or account }}";
 let answer = "";
 
 function setAnswer(value, label) {
@@ -307,6 +419,8 @@ def _render_captcha_template(**kwargs):
         "solved": False,
         "error": None,
         "answer": "",
+        "display_account": "",
+        "route_account": "",
         "captcha_type": "",
         "dx": 0,
         "dy": 0,
@@ -333,18 +447,21 @@ def create_app():
     def captcha_page(account_id):
         if account_id in ("favicon.ico", "robots.txt"):
             return "", 404
-        with _sessions_lock:
-            session = _captcha_sessions.get(account_id)
+        with _sessions_lock, _session_store_lock():
+            session = _load_sessions_unlocked().get(account_id)
         if not session:
             return _render_captcha_template(account=account_id, captcha_ready=False,
                                             solved=False, error="会话不存在或已过期，请重新获取验证码")
+        display_account = session.get("account_id") or account_id
         if session.get("solved"):
-            return _render_captcha_template(account=account_id, captcha_ready=False,
+            return _render_captcha_template(account=account_id, route_account=account_id,
+                                            display_account=display_account, captcha_ready=False,
                                             solved=True, answer=session.get("answer", ""))
         if not session.get("captcha_data"):
             return _render_captcha_template(account=account_id, captcha_ready=False, solved=False)
 
-        with _sessions_lock:
+        with _sessions_lock, _session_store_lock():
+            session = _load_sessions_unlocked().get(account_id, session)
             data = session.get("captcha_data", {})
             created_at = session.get("created_at", time.time())
         debug = {
@@ -360,6 +477,8 @@ def create_app():
         }
         return _render_captcha_template(
             account=account_id,
+            route_account=account_id,
+            display_account=display_account,
             captcha_ready=True,
             solved=False,
             captcha_type=data.get("type", "?"),
@@ -377,11 +496,17 @@ def create_app():
 
     @app.route("/<path:account_id>/submit", methods=["POST"])
     def captcha_submit(account_id):
-        with _sessions_lock:
-            session = _captcha_sessions.get(account_id)
-            if not session or session.get("solved"):
-                return _render_captcha_template(account=account_id, solved=True,
+        with _sessions_lock, _session_store_lock():
+            session = _load_sessions_unlocked().get(account_id)
+            display_account = session.get("account_id") if session else account_id
+            if not session:
+                return _render_captcha_template(account=account_id, route_account=account_id,
+                                                display_account=display_account, solved=False,
                                                 error="会话已过期")
+            if session.get("solved"):
+                return _render_captcha_template(account=account_id, route_account=account_id,
+                                                display_account=display_account, solved=True,
+                                                answer=session.get("answer", ""))
 
             answer = str(request.form.get("answer") or "").strip()
             if not answer:
@@ -389,52 +514,65 @@ def create_app():
             session["answer"] = answer
             session["solved"] = True
             session["solved_at"] = time.time()
+            _captcha_sessions[account_id] = session
+            _save_sessions_unlocked()
 
         logger.info(f"[SehuatangCaptcha] Account {account_id}: user submitted {answer}")
-        return _render_captcha_template(account=account_id, solved=True, answer=answer)
+        return _render_captcha_template(account=account_id, route_account=account_id,
+                                        display_account=display_account, solved=True, answer=answer)
 
     return app
 
 
 # ─── Session management ───────────────────────────────────
-def init_session(account_id: str):
-    """Initialize a captcha session for an account."""
-    with _sessions_lock:
+def init_session(account_id: str, display_account: str | None = None):
+    """Initialize a captcha session for an account/session key."""
+    with _sessions_lock, _session_store_lock():
+        _load_sessions_unlocked()
         _captcha_sessions[account_id] = {
+            "account_id": display_account or account_id,
             "solved": False, "answer": None, "captcha_data": None,
             "fs_sid": None, "created_at": time.time(),
         }
+        _save_sessions_unlocked()
+    logger.info(f"[SehuatangCaptcha] Initialized captcha session for account {account_id}")
 
 
 def destroy_session(account_id: str, destroy_fs: bool = True):
     """Clean up a captcha session."""
-    with _sessions_lock:
+    with _sessions_lock, _session_store_lock():
+        _load_sessions_unlocked()
         session = _captcha_sessions.pop(account_id, None)
+        _save_sessions_unlocked()
     if destroy_fs and session and session.get("fs_sid"):
         fs_destroy_session(session["fs_sid"])
 
 
 def set_captcha_data(account_id: str, data: dict, fs_sid: str):
     """Store captcha data for display."""
-    with _sessions_lock:
+    with _sessions_lock, _session_store_lock():
+        _load_sessions_unlocked()
         session = _captcha_sessions.get(account_id)
         if session:
             session["captcha_data"] = data
             session["fs_sid"] = fs_sid
             session["solved"] = False
+            _captcha_sessions[account_id] = session
+            _save_sessions_unlocked()
+    logger.info(f"[SehuatangCaptcha] Stored captcha data for account {account_id}: type={data.get('type')}")
 
 
 def is_solved(account_id: str) -> bool:
     """Check if user has submitted the captcha."""
-    with _sessions_lock:
-        session = _captcha_sessions.get(account_id)
+    with _sessions_lock, _session_store_lock():
+        session = _load_sessions_unlocked().get(account_id)
         return bool(session and session.get("solved"))
 
 
 def get_answer(account_id: str) -> str:
     """Get the user's raw answer string."""
-    with _sessions_lock:
-        session = _captcha_sessions.get(account_id)
+    with _sessions_lock, _session_store_lock():
+        session = _load_sessions_unlocked().get(account_id)
         if session and session.get("answer"):
             return str(session["answer"])
     return ""
@@ -442,8 +580,8 @@ def get_answer(account_id: str) -> str:
 
 def is_expired(account_id: str, timeout: int = 300) -> bool:
     """Check if the session has expired."""
-    with _sessions_lock:
-        session = _captcha_sessions.get(account_id)
+    with _sessions_lock, _session_store_lock():
+        session = _load_sessions_unlocked().get(account_id)
         if not session:
             return True
         return time.time() - session.get("created_at", 0) > timeout
@@ -466,6 +604,21 @@ def set_fs_url(url: str):
 def set_proxy_url(url: str):
     global _proxy_url_cache
     _proxy_url_cache = url.strip()
+
+
+def set_session_store_path(path: str):
+    """Set captcha session store path, preferably under MoviePilot plugin data dir."""
+    global _SESSION_STORE_PATH, _SESSION_LOCK_PATH, _SITE_CAPTCHA_LOCK_PATH
+    clean = str(path or "").strip()
+    if not clean:
+        return
+    directory = os.path.dirname(clean)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    _SESSION_STORE_PATH = clean
+    _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
+    _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
+    logger.info(f"[SehuatangCaptcha] Session store path: {_SESSION_STORE_PATH}")
 
 
 def set_base_url(url: str):
@@ -669,11 +822,12 @@ app = create_app() if Flask is not None else None
 # ─── Embedded server ──────────────────────────────────────
 _server_thread = None
 _server_port = 5099
+_server = None
 
 
 def start_server(port: int = 5099):
     """Start the embedded captcha relay HTTP server in a background thread."""
-    global _server_thread, _server_port
+    global _server_thread, _server_port, _server
     if _server_thread and _server_thread.is_alive():
         return
     if Flask is None:
@@ -682,18 +836,16 @@ def start_server(port: int = 5099):
 
     _server_port = port
 
-    try:
-        from waitress import serve
-        def _runner(): serve(app, host="0.0.0.0", port=port, threads=6)
-    except ImportError:
-        logger.warning("[SehuatangCaptcha] waitress not available, using Flask dev server")
-        def _runner(): app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-
     def _run():
+        global _server
         try:
-            _runner()
+            from werkzeug.serving import make_server
+            _server = make_server("0.0.0.0", port, app, threaded=True)
+            _server.serve_forever()
         except Exception:
             logger.error(f"[SehuatangCaptcha] Server error: {traceback.format_exc()}")
+        finally:
+            _server = None
 
     _server_thread = threading.Thread(target=_run, daemon=True)
     _server_thread.start()
@@ -701,6 +853,16 @@ def start_server(port: int = 5099):
 
 
 def stop_server():
-    """No-op: daemon thread stops with parent process. Kept for API completeness."""
-    global _server_thread
+    """Stop the embedded captcha relay server so plugin reloads do not leave stale listeners."""
+    global _server_thread, _server
+    server = _server
+    if server:
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            logger.warning(f"[SehuatangCaptcha] Server shutdown error: {traceback.format_exc()}")
+    if _server_thread and _server_thread.is_alive():
+        _server_thread.join(timeout=3)
     _server_thread = None
+    _server = None

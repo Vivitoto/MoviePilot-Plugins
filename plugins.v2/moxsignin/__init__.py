@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -140,7 +140,6 @@ class MoxSignIn(_PluginBase):
             "cmd": "/mox_signin",
             "event": EventType.PluginAction,
             "desc": "执行魔性签到",
-            "category": "站点",
             "data": {"action": "mox_signin"}
         }]
 
