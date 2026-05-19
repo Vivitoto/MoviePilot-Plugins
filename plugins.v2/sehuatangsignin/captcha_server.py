@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "0.1.12",
+            "version": "0.1.13",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -777,10 +777,17 @@ def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
         "cmd": "request.post",
         "url": url,
         "postData": body,
-        "headers": {"Content-Type": "text/plain", "Referer": f"{BASE_URL}/plugin.php?id=dd_sign"},
+        "headers": {
+            "Accept": "*/*",
+            "Content-Type": "text/plain",
+            "Origin": BASE_URL,
+            "Referer": f"{BASE_URL}/plugin.php?id=dd_sign",
+        },
         "maxTimeout": 30000,
     }, cookies)
     html = r.get("html", "")
+    if "static/safe/js/web.js" in html or "enter-btn" in html or "safeid=" in html:
+        return {"code": 403, "message": "safe gate returned", "data": "safe_gate", "raw": html[:300]}
     m = re.search(r"<body>(.+?)</body>", html, re.S)
     if m:
         try:

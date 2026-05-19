@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.12"
+    plugin_version = "0.1.13"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -676,6 +676,9 @@ class SehuatangSignin(_PluginBase):
                 fail_msg = check_result.get('data', '?')
                 steps.append(f"验证码失败：{fail_msg}")
                 logger.warning(f"[SehuatangSignin] [{account_id}] 验证码 check 失败: {check_result}")
+                if fail_msg == "safe_gate":
+                    result["message"] = "验证码 check 被站点安全入口拦截，请更新账号 Cookie（尤其 _safe/cf_clearance）或稍后重试"
+                    return result
                 if round_no >= max_rounds:
                     result["message"] = f"验证码失败：{fail_msg}"
                     return result
