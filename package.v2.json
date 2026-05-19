@@ -39,17 +39,17 @@
     "name": "98签到自用",
     "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
     "labels": "签到,手动验证,消息通知,验证码",
-    "version": "0.1.9",
+    "version": "0.1.10",
     "author": "Vivitoto",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
     "level": 1,
     "history": {
+      "v0.1.10": "修复验证码提交链路：FlareSolverr 返回 cookies 回写到会话，避免 check 使用旧验证码状态；slide/click 坐标以原图为基准；验证码 fetch/check 共用全局锁，check 失败后全局冷却 10-15 秒，降低多账号并发 429 风险。",
       "v0.1.9": "修复企微/MP 命令菜单兼容性：命令从数字开头的 /98_signin 改为字母开头的 /sht_signin，与魔性签到/司机社签到的命令格式保持一致。",
       "v0.1.8": "增强稳定性：FlareSolverr session 必定清理；验证码获取增加总超时；并行账号获取验证码使用全局节流；验证码 check 失败可重新获取并重试。",
       "v0.1.7": "配置页新增 98 站点网址 base_url，默认 https://sehuatang.net；域名变更时可自定义，并按配置域名生成 Cookie domain 和验证码/签到请求地址。",
       "v0.1.6": "验证码 Relay 支持 slide/rotate/click 三类人工复刻；跳过 drag；获取验证码改为 10-15 秒抖动重试并遇 429 停止；页面保留原图、thumb、尺寸和调试字段。",
-      "v0.1.5": "优化配置页：账号配置改为可添加/删除的账号名/Cookie 输入；插件名称改为 98签到自用；新增账号启动间隔和多账号并行处理开关。",
-      "v0.1.4": "修复 MP v2 安装后不加载的问题：package.v2.json 插件键名改为 SehuatangSignin，与插件类名一致；目录仍保持 sehuatangsignin 小写，符合 MP v2 下载/加载规则。"
+      "v0.1.5": "优化配置页：账号配置改为可添加/删除的账号名/Cookie 输入；插件名称改为 98签到自用；新增账号启动间隔和多账号并行处理开关。"
     }
   }
 }

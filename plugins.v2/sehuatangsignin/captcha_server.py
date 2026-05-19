@@ -106,7 +106,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
   {% if captcha_type == 'slide' %}
     <p class="info hint">拖动图块到背景缺口位置，然后提交。</p>
     <div class="captcha-wrap"><div class="captcha-area" id="captcha-area">
-      <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
+      <img class="captcha-bg" id="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
       {% if thumb_b64 %}<img class="captcha-thumb" id="captcha-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb" draggable="false" style="left:{{ dx }}px; top:{{ dy }}px; width:{{ tw }}px; height:{{ th }}px;">{% endif %}
     </div></div>
 
@@ -122,7 +122,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
     <p class="info hint">按提示图在背景图上点选；支持多点，按点击顺序提交。</p>
     {% if thumb_b64 %}<img class="thumb-preview" src="data:image/png;base64,{{ thumb_b64 }}" alt="click prompt" style="width:{{ tw }}px; height:{{ th }}px;">{% endif %}
     <div class="captcha-wrap"><div class="captcha-area" id="captcha-area">
-      <img class="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
+      <img class="captcha-bg" id="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
     </div></div>
     <button class="btn btn-subtle" type="button" onclick="undoClick()">↩️ 撤销上一个点</button>
 
@@ -188,6 +188,7 @@ showTimer({{ expire_seconds }});
 
 if (capType === 'slide') {
   const area = document.getElementById('captcha-area');
+  const bg = document.getElementById('captcha-bg');
   const thumb = document.getElementById('captcha-thumb');
   let left = dx, startX = 0;
   function clamp(v, min, max) { return Math.max(min, Math.min(v, max)); }
@@ -200,7 +201,8 @@ if (capType === 'slide') {
   }
   function point(e) {
     const t = e.touches ? e.touches[0] : e;
-    const r = area.getBoundingClientRect();
+    const target = bg || area;
+    const r = target.getBoundingClientRect();
     return { x: (t.clientX - r.left) * masterW / r.width };
   }
   function onStart(e) {
@@ -265,7 +267,9 @@ function undoClick() {
 if (capType === 'click') {
   const area = document.getElementById('captcha-area');
   if (area) area.addEventListener('click', function(e) {
-    const r = area.getBoundingClientRect();
+    const bg = document.getElementById('captcha-bg');
+    const target = bg || area;
+    const r = target.getBoundingClientRect();
     const x = Math.round((e.clientX - r.left) * masterW / r.width);
     const y = Math.round((e.clientY - r.top) * masterH / r.height);
     clickPoints.push({x, y}); renderClickPoints();
@@ -477,6 +481,31 @@ def _proxy_param() -> dict | None:
     return None
 
 
+def _merge_solution_cookies(cookies: list, solution_cookies: list):
+    """Merge cookies returned by FlareSolverr back into the mutable cookie jar.
+
+    The captcha endpoint may update server-side state cookies. If we keep
+    replaying only the original configured cookies, the following check request
+    can be evaluated against stale captcha state.
+    """
+    if not isinstance(cookies, list) or not isinstance(solution_cookies, list):
+        return
+    index = {}
+    for i, item in enumerate(cookies):
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        key = (item.get("name"), item.get("domain", ""), item.get("path", "/"))
+        index[key] = i
+    for item in solution_cookies:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        key = (item.get("name"), item.get("domain", ""), item.get("path", "/"))
+        if key in index:
+            cookies[index[key]].update(item)
+        else:
+            cookies.append(dict(item))
+
+
 def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) -> dict:
     if session_id:
         payload["session"] = session_id
@@ -494,6 +523,7 @@ def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) ->
     if d.get("status") != "ok":
         return {"error": d.get("message", "unknown")}
     sol = d.get("solution", {})
+    _merge_solution_cookies(cookies, sol.get("cookies", []))
     return {"html": sol.get("response", ""), "cookies": sol.get("cookies", []),
             "status": sol.get("status", 0)}
 

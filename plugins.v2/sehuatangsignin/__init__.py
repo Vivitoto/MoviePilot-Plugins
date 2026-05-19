@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import random
 import re
 import threading
 import time
@@ -45,7 +46,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.9"
+    plugin_version = "0.1.10"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -85,6 +86,8 @@ class SehuatangSignin(_PluginBase):
     _captcha_check_retries = 2
     _public_base_url = ""
 
+    # Global lock for site captcha endpoint operations across all accounts.
+    # It serializes both fetch and check calls to reduce site-wide 429 risk.
     _captcha_fetch_lock = threading.Lock()
 
     _scheduler: Optional[BackgroundScheduler] = None
@@ -628,8 +631,18 @@ class SehuatangSignin(_PluginBase):
 
                 answer = get_answer(account_id)
                 steps.append(f"用户提交：{answer}")
-                logger.info(f"[SehuatangSignin] [{account_id}] 提交验证码 check: {answer}")
-                ok, check_result = submit_check(fs_sid, answer, cap_type, cookies)
+                logger.info(f"[SehuatangSignin] [{account_id}] 等待全局验证码接口锁，提交 check: {answer}")
+                with self._captcha_fetch_lock:
+                    ok, check_result = submit_check(fs_sid, answer, cap_type, cookies)
+
+                    if not ok and round_no < max_rounds:
+                        cooldown = random.uniform(10, 15)
+                        steps.append(f"验证码失败全局冷却：{cooldown:.1f}秒后重试")
+                        logger.info(
+                            f"[SehuatangSignin] [{account_id}] 验证码 check 失败后全局冷却 {cooldown:.1f} 秒，"
+                            f"暂停其他账号验证码 fetch/check 以降低 429 风险"
+                        )
+                        time.sleep(cooldown)
 
                 if ok:
                     steps.append("验证码通过 ✅")
