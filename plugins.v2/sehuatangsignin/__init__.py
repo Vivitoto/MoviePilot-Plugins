@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "0.1.16"
+    plugin_version = "0.1.17"
     plugin_author = "Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
     plugin_order = 22
@@ -668,7 +668,16 @@ class SehuatangSignin(_PluginBase):
                         result["success"] = True
                         result["message"] = "今日已签到"
                     else:
-                        result["message"] = f"签到异常：{msg}"
+                        # Some runs return "验证超时" from sign_v2 even though the site state
+                        # has already changed to signed after captcha check. Trust the final page state.
+                        final_signed, final_btn = check_sign_status(fs_sid, cookies)
+                        steps.append(f"最终状态复查：{final_btn}")
+                        logger.info(f"[SehuatangSignin] [{account_id}] 最终状态复查: {final_btn}")
+                        if final_signed:
+                            result["success"] = True
+                            result["message"] = "签到成功：最终状态已签到"
+                        else:
+                            result["message"] = f"签到异常：{msg}"
                     return result
 
                 destroy_session(captcha_session_id, destroy_fs=False)
