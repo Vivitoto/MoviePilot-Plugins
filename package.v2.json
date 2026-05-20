@@ -37,17 +37,17 @@
     "name": "98签到自用",
     "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
     "labels": "签到,手动验证,消息通知,验证码",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "author": "Vivitoto",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
     "level": 1,
     "history": {
+      "v1.0.3": "优化详情页、配置页与通知文案：详情页顶部改为执行总览并移除插件名/副标题/版本展示；放宽配置项内部上下间距，优化多账号行列宽；汇总通知精简为“98签到完成：x/y 成功”，正文不再重复标题。",
       "v1.0.2": "修正验证码通过后的成功判定与多账号限流：check OK 后 sign_v2 返回“验证超时”且最终状态不可取时按成功兜底；按 HAR 中页面刷新按钮的浏览器 fetch 形态刷新验证码并提交 sign_v2；drag/未知验证码按 15-30 秒流控刷新；配置页精简为基本配置、账号、访问验证码、签到通知，移除并行处理与主定时签到服务。",
       "v1.0.1": "补齐作者主页字段 author_url，与 MoxSignIn / SijisheSignIn 保持一致，修正 MoviePilot 插件详情中作者主页显示。",
       "v1.0.0": "新增多账号用户资料与资产展示：解析等级、积分、金钱、注册时间；详情页改为横排账号卡片，新增按天统计的多账号金钱折线图；通知与提醒配置独立成组，汇总通知附带每账号资产摘要并写入插件日志；验证码提交后立即清理会话中的图片数据；新增独立签到提醒 Cron、资料刷新开关与串行随机账号顺序。",
       "v0.1.17": "修正签到结果判定：验证码 check 通过后若 sign_v2 返回“验证超时”等异常，会重新读取签到页最终状态；若页面已显示已签到，则按成功汇总，避免实际签到成功但通知误报失败。",
-      "v0.1.16": "调整验证码 check 顺序：优先使用 direct requests 携带 FS 更新后的 cookies/代理/userAgent 提交，避免先走 FlareSolverr request.post 触发 safe_gate 后污染当前验证码状态；仅 direct 网络失败时回退 FS POST。",
-      "v0.1.15": "新增验证码 check 兜底链路：当 FlareSolverr request.post 返回 safe_gate 时，使用同一 cookies、代理和 userAgent 通过 direct requests 再提交一次 text/plain check，用于规避 FS POST 与浏览器 XHR 行为差异。"
+      "v0.1.16": "调整验证码 check 顺序：优先使用 direct requests 携带 FS 更新后的 cookies/代理/userAgent 提交，避免先走 FlareSolverr request.post 触发 safe_gate 后污染当前验证码状态；仅 direct 网络失败时回退 FS POST。"
     }
   }
 }

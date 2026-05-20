@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -305,12 +305,9 @@ class SehuatangSignin(_PluginBase):
                 'component': 'VCardText',
                 'props': {'class': 'py-3'},
                 'content': [
-                    {'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between flex-wrap ga-2 mb-3'}, 'content': [
-                        {'component': 'div', 'content': [
-                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '98 签到自用'},
-                            {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': '多账号签到、人工验证码、资料资产与提醒状态'},
-                        ]},
-                        {'component': 'VChip', 'props': {'size': 'small', 'variant': 'tonal', 'color': 'primary'}, 'text': f'v{self.plugin_version}'},
+                    {'component': 'div', 'props': {'class': 'd-flex align-center mb-3'}, 'content': [
+                        {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-view-dashboard-outline'},
+                        {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '执行总览'},
                     ]},
                     {'component': 'VRow', 'props': {'dense': True}, 'content': [
                         stat_card('配置账号', str(len(self._accounts)), 'primary'),
@@ -446,14 +443,14 @@ class SehuatangSignin(_PluginBase):
                 'props': {'variant': 'tonal', 'class': 'mb-2', 'show': f'{{{{ account_count >= {idx} }}}}'},
                 'content': [{
                     'component': 'VCardText',
-                    'props': {'class': 'py-2'},
+                    'props': {'class': 'py-3'},
                     'content': [{
                         'component': 'VRow',
-                        'props': {'align': 'center', 'dense': True},
+                        'props': {'align': 'center', 'dense': True, 'class': 'gy-3'},
                         'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 2}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'compact', 'hide-details': True}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'compact', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'comfortable', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 7}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'comfortable', 'hide-details': True}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'd-flex justify-end align-center'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
                         ]
                     }]
@@ -484,7 +481,7 @@ class SehuatangSignin(_PluginBase):
                                 {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🟢 基本配置'},
                                 {
                                     'component': 'VRow',
-                                    'props': {'dense': True, 'align': 'center'},
+                                    'props': {'dense': True, 'align': 'center', 'class': 'gy-3'},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次', 'hide-details': True}}]},
@@ -518,7 +515,7 @@ class SehuatangSignin(_PluginBase):
                                 {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🖥️ 访问与验证码'},
                                 {
                                     'component': 'VRow',
-                                    'props': {'dense': True},
+                                    'props': {'dense': True, 'class': 'gy-4'},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '用于签到页、验证码接口、资料页和积分页；域名变更时修改，不要填写末尾 /', 'persistent-hint': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
@@ -542,7 +539,7 @@ class SehuatangSignin(_PluginBase):
                                 {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🔔 签到通知'},
                                 {
                                     'component': 'VRow',
-                                    'props': {'dense': True, 'align': 'center'},
+                                    'props': {'dense': True, 'align': 'center', 'class': 'gy-4'},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
@@ -1064,10 +1061,11 @@ class SehuatangSignin(_PluginBase):
             return
         success_count = sum(1 for r in results if r.get("success"))
         total = len(results)
-        lines = [f"98签到自用完成：{success_count}/{total} 成功"]
+        title = f"98签到完成：{success_count}/{total} 成功"
+        lines = []
         for r in results:
             icon = "✅" if r.get("success") else "❌"
-            lines.append(f"\n{icon} {r['account']}：{r['message']}")
+            lines.append(f"{icon} {r['account']}：{r['message']}")
             info = r.get("user_info") or {}
             if info.get("error"):
                 lines.append(f"资料：{info.get('error')}")
@@ -1077,8 +1075,8 @@ class SehuatangSignin(_PluginBase):
                     f"积分 {info.get('credits') or '-'}｜金钱 {info.get('money') or '-'}"
                 )
         text = "\n".join(lines)
-        logger.info(f"[SehuatangSignin] 汇总通知内容:\n98签到自用汇总\n{text}")
-        self.post_message(mtype=NotificationType.Plugin, title="98签到自用汇总", text=text)
+        logger.info(f"[SehuatangSignin] 汇总通知内容:\n{title}\n{text}")
+        self.post_message(mtype=NotificationType.Plugin, title=title, text=text)
 
     def _merge_user_info(self, results: list) -> Dict[str, Any]:
         user_info_map = self.get_data(self._user_info_key) or {}
