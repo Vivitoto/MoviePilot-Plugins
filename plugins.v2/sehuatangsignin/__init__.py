@@ -1,4 +1,3 @@
-import concurrent.futures
 import html as html_lib
 import json
 import random
@@ -51,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -63,7 +62,7 @@ class SehuatangSignin(_PluginBase):
     _notify = True
     _refresh_profile = True
     _onlyonce = False
-    _cron = "30 9 * * *"
+    _cron = ""
     _timeout = 30
     _timezone = "Asia/Shanghai"
 
@@ -73,8 +72,6 @@ class SehuatangSignin(_PluginBase):
     _account_names: list = []
     _account_cookies: list = []
     _account_count = 1
-    _account_interval_seconds = 3
-    _parallel_accounts = False
     _random_account_order = True
     _accounts_text = ""
     _accounts: list = []
@@ -94,9 +91,9 @@ class SehuatangSignin(_PluginBase):
     _captcha_check_retries = 2
     _public_base_url = ""
 
-    # Independent reminder notification. This is intentionally separate from
-    # the sign-in cron; it only nudges the user when not all accounts have
-    # a successful local sign-in record for today.
+    # Independent reminder notification. It only nudges the user when not all
+    # accounts have a successful local sign-in record for today; it never runs
+    # the sign-in flow itself.
     _reminder_enabled = False
     _reminder_cron = "0 21 * * *"
     _reminder_text = "98 签到提醒：今天还有账号未确认签到，请打开 MoviePilot 执行 /sht_signin。"
@@ -119,10 +116,10 @@ class SehuatangSignin(_PluginBase):
                 self._notify = config.get("notify", True)
                 self._refresh_profile = bool(config.get("refresh_profile", True))
                 self._onlyonce = config.get("onlyonce", False)
-                self._cron = config.get("cron") or "30 9 * * *"
+                # Main scheduled sign-in is intentionally disabled: this plugin
+                # now runs by manual command / one-shot save action only.
+                self._cron = ""
                 self._timeout = max(1, int(config.get("timeout") or 30))
-                self._account_interval_seconds = max(0, int(config.get("account_interval_seconds") or 3))
-                self._parallel_accounts = bool(config.get("parallel_accounts", False))
                 self._random_account_order = bool(config.get("random_account_order", True))
                 self._reminder_enabled = bool(config.get("reminder_enabled", False))
                 self._reminder_cron = str(config.get("reminder_cron") or "0 21 * * *").strip()
@@ -197,10 +194,8 @@ class SehuatangSignin(_PluginBase):
 
         config = {
             "enabled": self._enabled, "notify": self._notify, "refresh_profile": self._refresh_profile, "onlyonce": self._onlyonce,
-            "cron": self._cron, "timeout": self._timeout,
+            "cron": "", "timeout": self._timeout,
             "account_count": self._account_count,
-            "account_interval_seconds": self._account_interval_seconds,
-            "parallel_accounts": self._parallel_accounts,
             "random_account_order": self._random_account_order,
             "reminder_enabled": self._reminder_enabled,
             "reminder_cron": self._reminder_cron,
@@ -235,14 +230,6 @@ class SehuatangSignin(_PluginBase):
 
     def get_service(self) -> List[Dict[str, Any]]:
         services = []
-        if self._enabled and self._cron:
-            services.append({
-                "id": "SehuatangSignin",
-                "name": "98签到自用",
-                "trigger": CronTrigger.from_crontab(self._cron),
-                "func": self._run_cron,
-                "kwargs": {},
-            })
         if self._enabled and self._reminder_enabled and self._reminder_cron:
             services.append({
                 "id": "SehuatangSigninReminder",
@@ -467,7 +454,7 @@ class SehuatangSignin(_PluginBase):
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 2}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'compact', 'hide-details': True}}]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'compact', 'hide-details': True}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'text-md-right'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'd-flex justify-end align-center'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
                         ]
                     }]
                 }]
@@ -494,14 +481,17 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-1'}, 'text': '🟢 基本配置'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '控制插件是否启用、保存配置后是否立即执行一次，以及是否使用 FlareSolverr 访问站点。'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🟢 基本配置'},
                                 {
                                     'component': 'VRow',
+                                    'props': {'dense': True, 'align': 'center'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
                                     ]
                                 }
                             ]
@@ -513,8 +503,7 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-1'}, 'text': '👤 多账号配置'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '每个账号独立填写 Cookie，账号名称用于通知、验证码链接和资产历史；同名账号会自动追加序号避免覆盖。当前表单最多 20 个。'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '👤 多账号配置'},
                                 *account_cards,
                                 add_account_btn
                             ]
@@ -526,10 +515,10 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-1'}, 'text': '🖥️ 访问与验证码'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '这里决定插件访问 98 的入口、FlareSolverr 位置、代理以及人工验证码 relay 地址。站点换域名时只需要改 98 站点网址。'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🖥️ 访问与验证码'},
                                 {
                                     'component': 'VRow',
+                                    'props': {'dense': True},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '用于签到页、验证码接口、资料页和积分页；域名变更时修改，不要填写末尾 /', 'persistent-hint': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
@@ -539,29 +528,6 @@ class SehuatangSignin(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com', 'hint': '用于通知里的人工验证码链接；留空时使用本机端口地址', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 8}, 'content': [{'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-2'}, 'text': '开启后每个账号结束时读取资料页/积分页，用于账号卡片与金钱趋势；关闭后不影响签到，只沿用历史资料。'}]},
-                                    ]
-                                }
-                            ]
-                        }]
-                    },
-                    {
-                        'component': 'VCard',
-                        'props': {'variant': 'tonal', 'class': 'mb-4'},
-                        'content': [{
-                            'component': 'VCardItem',
-                            'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-1'}, 'text': '⏰ 定时与多账号'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '主定时任务会真正执行签到；串行更稳，并行更快但验证码接口仍会全局串行限流。'},
-                                {
-                                    'component': 'VRow',
-                                    'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': cron_component, 'props': {'model': 'cron', 'label': '定时任务'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'account_interval_seconds', 'label': '账号启动间隔(秒)', 'type': 'number', 'placeholder': '3'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'parallel_accounts', 'label': '并行处理多账号'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '串行随机账号顺序'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 串行：默认每次随机账号顺序；并行：按间隔依次启动，验证码链接互不混淆。'}]},
                                     ]
                                 }
                             ]
@@ -573,16 +539,14 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-1'}, 'text': '🔔 通知与提醒'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-3'}, 'text': '统一管理验证码通知、签到汇总和独立提醒；提醒 Cron 只发送提醒、不执行签到。'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🔔 签到通知'},
                                 {
                                     'component': 'VRow',
+                                    'props': {'dense': True, 'align': 'center'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送签到/验证码通知'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'reminder_text', 'label': '提醒通知内容', 'placeholder': '98 签到提醒：今天还有账号未确认签到。'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '提醒触发前如果本地记录显示今天所有账号都已成功，就自动跳过；关闭“发送签到/验证码通知”会关闭验证码和汇总通知，签到提醒由“启用签到提醒”单独控制。'}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'reminder_text', 'label': '提醒通知内容', 'placeholder': '98 签到提醒：今天还有账号未确认签到。'}}]},
                                     ]
                                 }
                             ]
@@ -602,17 +566,16 @@ class SehuatangSignin(_PluginBase):
                                 {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '④ Cookie 从浏览器登录后复制，过期、safe_gate 或资料获取失败时重新填写。'},
                                 {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑤ 个人资料刷新只影响账号卡片和金钱趋势；关闭后不影响签到主流程。'},
                                 {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑥ 验证码图片只临时保存在会话中，提交后会清理；签到流程结束会清理会话。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '⑦ 签到提醒只看插件本地当天成功记录，不会为了提醒额外访问 98。'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑦ “发送通知”只控制验证码通知和签到汇总；签到提醒是独立通知，由“启用签到提醒”单独控制。'},
+                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '⑧ 签到提醒只看插件本地当天成功记录，不会为了提醒额外访问 98。'},
                             ]
                         }]
                     },
                 ]
             }
         ], {
-            "enabled": False, "notify": True, "refresh_profile": True, "onlyonce": False, "cron": "30 9 * * *",
+            "enabled": False, "notify": True, "refresh_profile": True, "onlyonce": False, "cron": "",
             "account_count": 1,
-            "account_interval_seconds": 3,
-            "parallel_accounts": False,
             "random_account_order": True,
             "reminder_enabled": False,
             "reminder_cron": "0 21 * * *",
@@ -649,11 +612,6 @@ class SehuatangSignin(_PluginBase):
     # ── Scheduler callbacks ───────────────────────────────
     def _run_once(self):
         self._parse_accounts()  # Re-parse in case config changed
-        self._do_signin()
-
-    def _run_cron(self):
-        logger.info("[SehuatangSignin] 定时任务触发")
-        self._parse_accounts()
         self._do_signin()
 
     def _run_reminder(self):
@@ -700,16 +658,13 @@ class SehuatangSignin(_PluginBase):
             account_id = raw_account_id if seen_ids[raw_account_id] == 1 else f"{raw_account_id}_{seen_ids[raw_account_id]}"
             indexed_accounts.append((idx, account, account_id))
 
-        if self._parallel_accounts and len(indexed_accounts) > 1:
-            all_results = self._do_signin_parallel(indexed_accounts)
-        else:
-            if self._random_account_order and len(indexed_accounts) > 1:
-                random.shuffle(indexed_accounts)
-                logger.info(
-                    "[SehuatangSignin] 串行随机账号顺序: "
-                    + ", ".join(account_id for _, _, account_id in indexed_accounts)
-                )
-            all_results = self._do_signin_serial(indexed_accounts)
+        if self._random_account_order and len(indexed_accounts) > 1:
+            random.shuffle(indexed_accounts)
+            logger.info(
+                "[SehuatangSignin] 串行随机账号顺序: "
+                + ", ".join(account_id for _, _, account_id in indexed_accounts)
+            )
+        all_results = self._do_signin_serial(indexed_accounts)
 
         self._notify_summary(all_results)
         self._save_results(all_results)
@@ -720,35 +675,6 @@ class SehuatangSignin(_PluginBase):
             logger.info(f"[SehuatangSignin] [{pos+1}/{len(indexed_accounts)}] 串行处理账号: {account_id}")
             result = self._signin_single(account, account_id)
             all_results.append({"account": account_id, **result})
-            if pos < len(indexed_accounts) - 1 and self._account_interval_seconds > 0:
-                time.sleep(self._account_interval_seconds)
-        return all_results
-
-    def _do_signin_parallel(self, indexed_accounts: list) -> list:
-        all_results = []
-        futures = []
-        logger.info(
-            f"[SehuatangSignin] 并行处理 {len(indexed_accounts)} 个账号，启动间隔 {self._account_interval_seconds} 秒"
-        )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(indexed_accounts)) as executor:
-            for pos, (idx, account, account_id) in enumerate(indexed_accounts):
-                logger.info(f"[SehuatangSignin] [{pos+1}/{len(indexed_accounts)}] 并行启动账号: {account_id}")
-                future = executor.submit(self._signin_single, account, account_id)
-                futures.append((idx, account_id, future))
-                if pos < len(indexed_accounts) - 1 and self._account_interval_seconds > 0:
-                    time.sleep(self._account_interval_seconds)
-
-            for idx, account_id, future in futures:
-                try:
-                    result = future.result()
-                except Exception as e:
-                    logger.error(f"[SehuatangSignin] [{account_id}] 并行任务异常：{traceback.format_exc()}")
-                    result = {"success": False, "message": f"异常：{str(e)}", "steps": []}
-                all_results.append({"account": account_id, **result})
-
-        all_results.sort(key=lambda item: next(
-            (idx for idx, _, aid in indexed_accounts if aid == item.get("account")), 0
-        ))
         return all_results
 
     def _signin_single(self, account: dict, account_id: str) -> dict:
@@ -793,6 +719,10 @@ class SehuatangSignin(_PluginBase):
                 if not captcha_data:
                     result["message"] = "无法获取支持的验证码（slide/rotate/click），或接口限流/超时"
                     logger.warning(f"[SehuatangSignin] [{account_id}] 获取验证码失败")
+                    return result
+                if captcha_data.get("error"):
+                    result["message"] = captcha_data.get("message") or "验证码获取失败"
+                    logger.warning(f"[SehuatangSignin] [{account_id}] {result['message']}")
                     return result
 
                 cap_type = captcha_data["type"]
@@ -844,7 +774,7 @@ class SehuatangSignin(_PluginBase):
 
                 if ok:
                     steps.append("验证码通过 ✅")
-                    logger.info(f"[SehuatangSignin] [{account_id}] 验证码通过，完成签到...")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 验证码通过，提交签到...")
                     sign_result = complete_signin(fs_sid, cookies)
                     code = sign_result.get("code", -1)
                     msg = sign_result.get("message", "")
@@ -865,6 +795,12 @@ class SehuatangSignin(_PluginBase):
                         if final_signed:
                             result["success"] = True
                             result["message"] = "签到成功：最终状态已签到"
+                        elif "验证超时" in str(msg) and final_btn == "N/A":
+                            result["success"] = True
+                            result["message"] = "签到成功：验证码已通过，sign_v2 返回验证超时（最终状态未取到）"
+                            logger.info(
+                                f"[SehuatangSignin] [{account_id}] check 已 OK，sign_v2 返回验证超时且最终状态 N/A，按成功兜底"
+                            )
                         else:
                             result["message"] = f"签到异常：{msg}"
                     return result

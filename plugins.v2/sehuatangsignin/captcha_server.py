@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.1",
+            "version": "1.0.2",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -778,22 +778,44 @@ def fs_destroy_session(fs_sid: str):
         pass
 
 
-def fs_get(fs_sid: str, url: str, cookies: list) -> str:
-    return fs_call(fs_sid, {"cmd": "request.get", "url": url, "maxTimeout": 60000}, cookies).get("html", "")
+def fs_get(fs_sid: str, url: str, cookies: list, headers: dict | None = None) -> str:
+    payload = {"cmd": "request.get", "url": url, "maxTimeout": 60000}
+    if headers:
+        payload["headers"] = {k: v for k, v in headers.items() if v}
+    return fs_call(fs_sid, payload, cookies).get("html", "")
 
 
-def _check_headers(fs_sid: str) -> dict:
-    return {
+def _browser_fetch_headers(fs_sid: str, *, content_type: str | None = None,
+                           include_origin: bool = False) -> dict:
+    headers = {
         "Accept": "*/*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Content-Type": "text/plain",
-        "Origin": BASE_URL,
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
         "Referer": f"{BASE_URL}/plugin.php?id=dd_sign",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin",
         **({"User-Agent": _fs_user_agents.get(fs_sid)} if _fs_user_agents.get(fs_sid) else {}),
     }
+    if include_origin:
+        headers["Origin"] = BASE_URL
+    if content_type:
+        headers["Content-Type"] = content_type
+    return headers
+
+
+def _captcha_headers(fs_sid: str) -> dict:
+    # HAR-confirmed: both the first captcha load and the refresh icon call the
+    # same loadCaptcha() function, i.e. browser fetch('misc.php?mod=captcha')
+    # from dd_sign. For same-origin GET fetch Chrome did not send Origin, but it
+    # did send no-cache + Sec-Fetch cors/empty headers.
+    return _browser_fetch_headers(fs_sid, include_origin=False)
+
+
+def _check_headers(fs_sid: str) -> dict:
+    # HAR-confirmed: check is same-origin POST text/plain and does include Origin.
+    return _browser_fetch_headers(fs_sid, content_type="text/plain", include_origin=True)
 
 
 def _parse_check_html(html: str) -> dict:
@@ -894,8 +916,9 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
                               max_wait_seconds: int = 300) -> dict | None:
     """Fetch a supported captcha from sehuatang.
 
-    Supported manual relay types: slide, rotate, click. Drag is intentionally skipped.
-    Retries use a 10–15s jitter to avoid hammering the captcha endpoint, with a total wait cap.
+    Supported manual relay types: slide, rotate, click. Drag is unsupported for
+    manual relay, so keep refreshing with a slower backoff until a supported
+    captcha appears, the endpoint rate-limits, or the total wait cap expires.
     """
     supported_types = {"slide", "rotate", "click"}
     attempt = 0
@@ -906,15 +929,18 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
             remaining = deadline - time.time()
             if remaining <= 0:
                 break
-            delay = min(random.uniform(10, 15), remaining)
+            # Keep retries deliberately paced. The captcha endpoint is site-wide
+            # sensitive: unsupported drag captchas should be refreshed, but not
+            # hammered into 429 while other accounts are waiting behind the lock.
+            delay = min(random.uniform(15, 30), remaining)
             logger.debug(f"[SehuatangCaptcha] Waiting {delay:.1f}s before captcha retry")
             time.sleep(delay)
-        html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies)
+        html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies, headers=_captcha_headers(fs_sid))
         cap = extract_json(html)
         code = cap.get("code")
         if code == 429:
             logger.warning("[SehuatangCaptcha] Captcha endpoint returned 429; stop retrying this account")
-            return None
+            return {"error": "rate_limited", "message": "验证码接口 429 限流，本账号本轮停止获取"}
         data = cap.get("data", {})
         if not data or not data.get("type"):
             logger.debug(f"[SehuatangCaptcha] Attempt {attempt}: no captcha type, code={code}")
@@ -930,7 +956,10 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
                 f"display=({data.get('display_x')},{data.get('display_y')})"
             )
             return data
-        logger.info(f"[SehuatangCaptcha] Attempt {attempt}: got unsupported {cap_type}, retrying with jitter")
+        if cap_type == "drag":
+            logger.info(f"[SehuatangCaptcha] Attempt {attempt}: got unsupported drag, refreshing slowly")
+        else:
+            logger.info(f"[SehuatangCaptcha] Attempt {attempt}: got unsupported {cap_type}, retrying with jitter")
     logger.warning(f"[SehuatangCaptcha] Captcha fetch timed out after {max_wait_seconds}s")
     return None
 
@@ -941,6 +970,15 @@ def check_sign_status(fs_sid: str, cookies: list) -> tuple:
     btn = re.search(r'id="signin-btn"[^>]*>([^<]+)<', html) if html else None
     if btn:
         return "已签到" in btn.group(1), btn.group(1)
+    if html:
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text)
+        if "已签到" in text:
+            return True, "已签到"
+        if "今日未签到" in text or "点击签到" in text:
+            return False, "今日未签到，点击签到"
+        if "static/safe/js/web.js" in html or "safeid=" in html or "enter-btn" in html:
+            return False, "safe_gate"
     return False, "N/A"
 
 
@@ -954,7 +992,14 @@ def submit_check(fs_sid: str, answer: str, cap_type: str, cookies: list) -> tupl
 
 def complete_signin(fs_sid: str, cookies: list) -> dict:
     """Complete the sign-in after captcha passes."""
-    html = fs_get(fs_sid, f"{BASE_URL}/plugin.php?id=dd_sign&ac=sign_v2", cookies)
+    # HAR-confirmed: page JS calls sign_v2 via same-origin browser fetch, not a
+    # top-level navigation. Match that shape to avoid subtle session/timing drift.
+    html = fs_get(
+        fs_sid,
+        f"{BASE_URL}/plugin.php?id=dd_sign&ac=sign_v2",
+        cookies,
+        headers=_browser_fetch_headers(fs_sid, include_origin=False),
+    )
     return extract_json(html)
 
 
