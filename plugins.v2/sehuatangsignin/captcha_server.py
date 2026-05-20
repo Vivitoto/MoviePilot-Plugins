@@ -495,7 +495,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.3",
+            "version": "1.0.4",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,

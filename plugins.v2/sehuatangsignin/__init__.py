@@ -50,7 +50,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -448,10 +448,10 @@ class SehuatangSignin(_PluginBase):
                         'component': 'VRow',
                         'props': {'align': 'center', 'dense': True, 'class': 'gy-3'},
                         'content': [
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'comfortable', 'hide-details': True}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 7}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'comfortable', 'hide-details': True}}]},
-                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'd-flex justify-end align-center'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'py-3'}, 'content': [{'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': f'账号 {idx}'}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_name', 'label': '账号名称', 'placeholder': f'账号{idx}', 'density': 'comfortable', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 7, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': f'account_{idx}_cookie', 'label': 'Cookie', 'placeholder': '_safe=xxx; cPNj_2132_auth=yyy; cPNj_2132_saltkey=zzz; cPNj_2132_sid=0', 'density': 'comfortable', 'hide-details': True}}]},
+                            {'component': 'VCol', 'props': {'cols': 12, 'md': 1, 'class': 'd-flex justify-end align-center py-3'}, 'content': [{'component': 'VBtn', 'props': {'size': 'small', 'variant': 'text', 'color': 'error', 'onClick': delete_script}, 'text': '删除'}]},
                         ]
                     }]
                 }]
@@ -483,12 +483,12 @@ class SehuatangSignin(_PluginBase):
                                     'component': 'VRow',
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-3'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
                                     ]
                                 }
                             ]
@@ -517,14 +517,14 @@ class SehuatangSignin(_PluginBase):
                                     'component': 'VRow',
                                     'props': {'dense': True, 'class': 'gy-4'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '用于签到页、验证码接口、资料页和积分页；域名变更时修改，不要填写末尾 /', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98）', 'placeholder': 'http://192.168.31.216:7890'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com', 'hint': '用于通知里的人工验证码链接；留空时使用本机端口地址', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '用于签到页、验证码接口、资料页和积分页；域名变更时修改，不要填写末尾 /', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr 地址', 'placeholder': 'http://127.0.0.1:8191'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98）', 'placeholder': 'http://192.168.31.216:7890'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com', 'hint': '用于通知里的人工验证码链接；留空时使用本机端口地址', 'persistent-hint': True}}]},
                                     ]
                                 }
                             ]
@@ -541,9 +541,9 @@ class SehuatangSignin(_PluginBase):
                                     'component': 'VRow',
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-4'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 12}, 'content': [{'component': 'VTextField', 'props': {'model': 'reminder_text', 'label': '提醒通知内容', 'placeholder': '98 签到提醒：今天还有账号未确认签到。'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'reminder_text', 'label': '提醒通知内容', 'placeholder': '98 签到提醒：今天还有账号未确认签到。'}}]},
                                     ]
                                 }
                             ]
