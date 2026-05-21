@@ -68,6 +68,11 @@ except ValueError:
     _SESSION_MAX_AGE_SECONDS = 86400
 
 try:
+    _DEFAULT_CAPTCHA_SITE_TTL_SECONDS = max(10, int(os.environ.get("SEHUATANG_CAPTCHA_SITE_TTL_SECONDS", "30")))
+except ValueError:
+    _DEFAULT_CAPTCHA_SITE_TTL_SECONDS = 30
+
+try:
     import fcntl
 except ImportError:  # pragma: no cover - non-Linux fallback
     fcntl = None
@@ -302,7 +307,10 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 {% else %}
 <div class="card" style="text-align:center">
   <p>正在获取验证码...</p>
-  <button class="btn btn-subtle" onclick="location.reload()">🔄 重试</button>
+  <p class="info">后台会在你打开本页面后现场获取验证码，避免通知延迟吃掉有效期。</p>
+  <p class="info">页面会自动刷新，请保持打开。</p>
+  <button class="btn btn-subtle" onclick="location.reload()">🔄 立即刷新</button>
+  <script>setTimeout(function(){ location.reload(); }, 2000);</script>
 </div>
 {% endif %}
 </div>
@@ -313,6 +321,7 @@ const dx = {{ dx }}, dy = {{ dy }}, tw = {{ tw }}, th = {{ th }};
 const masterW = {{ master_w }}, masterH = {{ master_h }};
 const account = "{{ route_account or account }}";
 let answer = "";
+let expired = false;
 
 function setAnswer(value, label) {
   answer = String(value || "");
@@ -322,8 +331,8 @@ function setAnswer(value, label) {
   if (ans) ans.textContent = answer || '-';
   if (act) act.textContent = label || answer || '尚未操作';
   if (btn) {
-    btn.disabled = !answer;
-    btn.textContent = answer ? '✅ 提交答案' : '先完成验证码操作';
+    btn.disabled = expired || !answer;
+    btn.textContent = expired ? '验证码已过期' : (answer ? '✅ 提交答案' : '先完成验证码操作');
   }
 }
 
@@ -331,7 +340,13 @@ function showTimer(sec) {
   const el = document.getElementById('expire-timer');
   if (!el) return;
   const tick = () => {
-    if (sec <= 0) { el.textContent = '⚠️ 验证码可能已过期，请重新触发签到'; return; }
+    if (sec <= 0) {
+      expired = true;
+      el.textContent = '⚠️ 验证码已过期，请等待下一轮新链接';
+      const btn = document.getElementById('submit-btn');
+      if (btn) { btn.disabled = true; btn.textContent = '验证码已过期'; }
+      return;
+    }
     const m = Math.floor(sec / 60), s = sec % 60;
     el.textContent = `⏰ 剩余 ${m}:${String(s).padStart(2,'0')} 有效`;
     sec--;
@@ -339,7 +354,9 @@ function showTimer(sec) {
   };
   tick();
 }
+{% if captcha_ready %}
 showTimer({{ expire_seconds }});
+{% endif %}
 
 if (capType === 'slide') {
   const area = document.getElementById('captcha-area');
@@ -432,7 +449,7 @@ if (capType === 'click') {
 }
 
 async function submitAnswer() {
-  if (!answer) return;
+  if (expired || !answer) return;
   const btn = document.getElementById('submit-btn');
   btn.disabled = true;
   btn.textContent = '提交中...';
@@ -473,7 +490,7 @@ def _render_captcha_template(**kwargs):
         "master_h": 220,
         "master_b64": "",
         "thumb_b64": "",
-        "expire_seconds": 300,
+        "expire_seconds": _DEFAULT_CAPTCHA_SITE_TTL_SECONDS,
         "debug_json": "{}",
     }
     defaults.update(kwargs)
@@ -495,7 +512,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.4",
+            "version": "1.0.5",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -511,13 +528,24 @@ def create_app():
         if not session:
             return _render_captcha_template(account=account_id, captcha_ready=False,
                                             solved=False, error="会话不存在或已过期，请重新获取验证码")
+        if not session.get("requested"):
+            with _sessions_lock, _session_store_lock():
+                sessions = _load_sessions_unlocked()
+                session = sessions.get(account_id, session)
+                if session and not session.get("requested"):
+                    session["requested"] = True
+                    session["requested_at"] = time.time()
+                    _captcha_sessions[account_id] = session
+                    _save_sessions_unlocked()
+            logger.info(f"[SehuatangCaptcha] Account {account_id}: page opened, captcha fetch requested")
         display_account = session.get("account_id") or account_id
         if session.get("solved"):
             return _render_captcha_template(account=account_id, route_account=account_id,
                                             display_account=display_account, captcha_ready=False,
                                             solved=True, answer=session.get("answer", ""))
         if not session.get("captcha_data"):
-            return _render_captcha_template(account=account_id, captcha_ready=False, solved=False)
+            return _render_captcha_template(account=account_id, captcha_ready=False, solved=False,
+                                            expire_seconds=0)
 
         with _sessions_lock, _session_store_lock():
             session = _load_sessions_unlocked().get(account_id, session)
@@ -549,7 +577,7 @@ def create_app():
             master_h=int(data.get("master_height") or 220),
             master_b64=data.get("master_b64", ""),
             thumb_b64=data.get("thumb_b64", ""),
-            expire_seconds=max(0, int(300 - (time.time() - created_at))),
+            expire_seconds=max(0, int(float(session.get("site_expires_at") or (created_at + _DEFAULT_CAPTCHA_SITE_TTL_SECONDS)) - time.time())),
             debug_json=json.dumps(debug, ensure_ascii=False, indent=2),
         )
 
@@ -566,6 +594,12 @@ def create_app():
                 return _render_captcha_template(account=account_id, route_account=account_id,
                                                 display_account=display_account, solved=True,
                                                 answer=session.get("answer", ""))
+
+            site_expires_at = float(session.get("site_expires_at") or 0)
+            if site_expires_at and time.time() > site_expires_at:
+                return _render_captcha_template(account=account_id, route_account=account_id,
+                                                display_account=display_account, solved=False,
+                                                error="验证码已过期，请等待下一轮新链接")
 
             answer = str(request.form.get("answer") or "").strip()
             if not answer:
@@ -597,6 +631,7 @@ def init_session(account_id: str, display_account: str | None = None):
         _captcha_sessions[account_id] = {
             "account_id": display_account or account_id,
             "solved": False, "answer": None, "captcha_data": None,
+            "requested": False, "requested_at": None,
             "fs_sid": None, "created_at": time.time(),
         }
         _save_sessions_unlocked()
@@ -619,8 +654,11 @@ def set_captcha_data(account_id: str, data: dict, fs_sid: str):
         _load_sessions_unlocked()
         session = _captcha_sessions.get(account_id)
         if session:
+            ttl = int(data.get("site_ttl_seconds") or _DEFAULT_CAPTCHA_SITE_TTL_SECONDS)
+            ttl = max(10, ttl)
             session["captcha_data"] = data
             session["fs_sid"] = fs_sid
+            session["site_expires_at"] = time.time() + ttl
             session["solved"] = False
             _captcha_sessions[account_id] = session
             _save_sessions_unlocked()
@@ -641,6 +679,25 @@ def get_answer(account_id: str) -> str:
         if session and session.get("answer"):
             return str(session["answer"])
     return ""
+
+
+def get_solved_at(account_id: str) -> float:
+    """Get the timestamp when user submitted the captcha answer."""
+    with _sessions_lock, _session_store_lock():
+        session = _load_sessions_unlocked().get(account_id)
+        if session and session.get("solved_at"):
+            try:
+                return float(session["solved_at"])
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def is_requested(account_id: str) -> bool:
+    """Check if user has opened the relay page and requested a live captcha fetch."""
+    with _sessions_lock, _session_store_lock():
+        session = _load_sessions_unlocked().get(account_id)
+        return bool(session and session.get("requested"))
 
 
 def is_expired(account_id: str, timeout: int = 300) -> bool:

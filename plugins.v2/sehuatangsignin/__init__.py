@@ -31,8 +31,10 @@ from .captcha_server import (
     fs_destroy_session,
     fs_get,
     get_answer,
+    get_solved_at,
     init_session,
     is_expired,
+    is_requested,
     is_solved,
     set_captcha_data,
     set_base_url,
@@ -50,7 +52,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -89,6 +91,7 @@ class SehuatangSignin(_PluginBase):
     _captcha_timeout = 300
     _captcha_fetch_timeout = 300
     _captcha_check_retries = 2
+    _captcha_site_ttl = 30
     _public_base_url = ""
 
     # Independent reminder notification. It only nudges the user when not all
@@ -101,6 +104,9 @@ class SehuatangSignin(_PluginBase):
     # Global lock for site captcha endpoint operations across all accounts.
     # It serializes both fetch and check calls to reduce site-wide 429 risk.
     _captcha_fetch_lock = threading.Lock()
+    _signin_lock = threading.Lock()
+    _signin_active = False
+    _captcha_site_ttl_buffer = 2
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -613,6 +619,9 @@ class SehuatangSignin(_PluginBase):
 
     def _run_reminder(self):
         logger.info("[SehuatangSignin] 签到提醒任务触发")
+        if self._signin_active or self._signin_lock.locked():
+            logger.info("[SehuatangSignin] 签到提醒跳过：签到流程正在进行中")
+            return
         self._parse_accounts()
         if not self._accounts:
             logger.info("[SehuatangSignin] 签到提醒跳过：未配置账号")
@@ -643,28 +652,43 @@ class SehuatangSignin(_PluginBase):
 
     # ── Core sign-in logic (multi-account loop) ───────────
     def _do_signin(self):
-        if not self._accounts:
-            logger.warning("[SehuatangSignin] 未配置账号，请在插件设置中填写账号")
+        acquired = self._signin_lock.acquire(blocking=False)
+        if not acquired:
+            logger.warning("[SehuatangSignin] 签到流程正在执行，跳过重复触发")
+            if self._notify:
+                self.post_message(
+                    mtype=NotificationType.Plugin,
+                    title="98签到执行中",
+                    text="已有签到流程正在执行，本次触发已跳过。"
+                )
             return
+        try:
+            self._signin_active = True
+            if not self._accounts:
+                logger.warning("[SehuatangSignin] 未配置账号，请在插件设置中填写账号")
+                return
 
-        indexed_accounts = []
-        seen_ids = {}
-        for idx, account in enumerate(self._accounts):
-            raw_account_id = self._get_account_id(account, idx)
-            seen_ids[raw_account_id] = seen_ids.get(raw_account_id, 0) + 1
-            account_id = raw_account_id if seen_ids[raw_account_id] == 1 else f"{raw_account_id}_{seen_ids[raw_account_id]}"
-            indexed_accounts.append((idx, account, account_id))
+            indexed_accounts = []
+            seen_ids = {}
+            for idx, account in enumerate(self._accounts):
+                raw_account_id = self._get_account_id(account, idx)
+                seen_ids[raw_account_id] = seen_ids.get(raw_account_id, 0) + 1
+                account_id = raw_account_id if seen_ids[raw_account_id] == 1 else f"{raw_account_id}_{seen_ids[raw_account_id]}"
+                indexed_accounts.append((idx, account, account_id))
 
-        if self._random_account_order and len(indexed_accounts) > 1:
-            random.shuffle(indexed_accounts)
-            logger.info(
-                "[SehuatangSignin] 串行随机账号顺序: "
-                + ", ".join(account_id for _, _, account_id in indexed_accounts)
-            )
-        all_results = self._do_signin_serial(indexed_accounts)
+            if self._random_account_order and len(indexed_accounts) > 1:
+                random.shuffle(indexed_accounts)
+                logger.info(
+                    "[SehuatangSignin] 串行随机账号顺序: "
+                    + ", ".join(account_id for _, _, account_id in indexed_accounts)
+                )
+            all_results = self._do_signin_serial(indexed_accounts)
 
-        self._notify_summary(all_results)
-        self._save_results(all_results)
+            self._notify_summary(all_results)
+            self._save_results(all_results)
+        finally:
+            self._signin_active = False
+            self._signin_lock.release()
 
     def _do_signin_serial(self, indexed_accounts: list) -> list:
         all_results = []
@@ -678,6 +702,7 @@ class SehuatangSignin(_PluginBase):
         steps = []
         result = {"success": False, "message": "", "steps": steps}
         fs_sid = ""
+        captcha_session_id = ""
         captcha_session_active = False
         try:
             cookies = self._build_cookies(account)
@@ -703,6 +728,30 @@ class SehuatangSignin(_PluginBase):
                     steps.append(f"验证码重试：第 {round_no}/{max_rounds} 轮")
                     logger.info(f"[SehuatangSignin] [{account_id}] 验证码失败后重试，第 {round_no}/{max_rounds} 轮")
 
+                captcha_session_id = f"{account_id}-{uuid.uuid4().hex[:8]}"
+                init_session(captcha_session_id, account_id)
+                captcha_session_active = True
+                account_path = quote(captcha_session_id, safe="")
+                captcha_url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
+                self._send_captcha_notification("打开后获取", captcha_url, account_id)
+                logger.info(f"[SehuatangSignin] [{account_id}] 已发送验证码准备通知，等待用户打开页面: {captcha_session_id}")
+
+                open_deadline = time.time() + self._captcha_timeout
+                while time.time() < open_deadline:
+                    if is_requested(captcha_session_id):
+                        logger.info(f"[SehuatangSignin] [{account_id}] 用户已打开验证码页面，开始现场获取验证码")
+                        break
+                    if is_expired(captcha_session_id, self._captcha_timeout):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 验证码准备会话已过期")
+                        break
+                    time.sleep(2)
+
+                if not is_requested(captcha_session_id):
+                    destroy_session(captcha_session_id, destroy_fs=False)
+                    captcha_session_active = False
+                    result["message"] = f"验证码页面未在 {self._captcha_timeout} 秒内打开"
+                    return result
+
                 logger.info(
                     f"[SehuatangSignin] [{account_id}] 等待全局验证码获取锁，"
                     f"最长获取 {self._captcha_fetch_timeout} 秒"
@@ -723,6 +772,7 @@ class SehuatangSignin(_PluginBase):
                     return result
 
                 cap_type = captcha_data["type"]
+                captcha_data["site_ttl_seconds"] = self._captcha_site_ttl
                 steps.append(f"验证码类型：{cap_type}")
                 logger.info(
                     f"[SehuatangSignin] [{account_id}] 验证码: {cap_type} "
@@ -731,17 +781,17 @@ class SehuatangSignin(_PluginBase):
                     f"thumb={captcha_data.get('thumb_width')}x{captcha_data.get('thumb_height')}"
                 )
 
-                captcha_session_id = f"{account_id}-{uuid.uuid4().hex[:8]}"
-                init_session(captcha_session_id, account_id)
-                captcha_session_active = True
                 set_captcha_data(captcha_session_id, captcha_data, fs_sid)
-                account_path = quote(captcha_session_id, safe="")
-                captcha_url = f"{self._public_base_url}/{account_path}" if self._public_base_url else f"http://localhost:{self._captcha_port}/{account_path}"
-                self._send_captcha_notification(cap_type, captcha_url, account_id)
-                logger.info(f"[SehuatangSignin] [{account_id}] 已发送验证码通知，等待用户操作: {captcha_session_id}")
+                captcha_started_at = time.time()
 
-                deadline = time.time() + self._captcha_timeout
-                while time.time() < deadline:
+                # 站点验证码实际有效期很短（日志显示约 30 秒），本地 5 分钟只会让过期答案被提交。
+                # 因此每张验证码从用户打开页面后现场获取，并按站点 TTL 等待。
+                captcha_safe_window = max(10, self._captcha_site_ttl - self._captcha_site_ttl_buffer)
+                answer_deadline = min(
+                    time.time() + self._captcha_timeout,
+                    captcha_started_at + captcha_safe_window,
+                )
+                while time.time() < answer_deadline:
                     if is_solved(captcha_session_id):
                         logger.info(f"[SehuatangSignin] [{account_id}] 用户已完成验证码")
                         break
@@ -751,7 +801,27 @@ class SehuatangSignin(_PluginBase):
                     time.sleep(2)
 
                 if not is_solved(captcha_session_id):
-                    result["message"] = f"验证码超时（{self._captcha_timeout}秒）"
+                    destroy_session(captcha_session_id, destroy_fs=False)
+                    captcha_session_active = False
+                    msg = f"验证码超时（站点有效期约 {self._captcha_site_ttl} 秒）"
+                    steps.append(msg)
+                    logger.warning(f"[SehuatangSignin] [{account_id}] {msg}")
+                    if round_no < max_rounds:
+                        continue
+                    result["message"] = msg
+                    return result
+
+                solved_at = get_solved_at(captcha_session_id) or time.time()
+                answer_age = solved_at - captcha_started_at
+                if answer_age > captcha_safe_window:
+                    destroy_session(captcha_session_id, destroy_fs=False)
+                    captcha_session_active = False
+                    msg = f"验证码提交过慢（{answer_age:.1f}s），已超过站点有效期，刷新下一轮"
+                    steps.append(msg)
+                    logger.warning(f"[SehuatangSignin] [{account_id}] {msg}")
+                    if round_no < max_rounds:
+                        continue
+                    result["message"] = f"验证码失败：提交超过站点有效期约 {self._captcha_site_ttl} 秒"
                     return result
 
                 answer = get_answer(captcha_session_id)
@@ -829,8 +899,8 @@ class SehuatangSignin(_PluginBase):
                         f"积分={profile.get('credits') or '-'} 金钱={profile.get('money') or '-'}"
                     )
             if captcha_session_active:
-                destroy_session(captcha_session_id if 'captcha_session_id' in locals() else account_id)
-            elif fs_sid:
+                destroy_session(captcha_session_id or account_id, destroy_fs=False)
+            if fs_sid:
                 fs_destroy_session(fs_sid)
 
     # ── Helpers ────────────────────────────────────────────
@@ -1045,12 +1115,16 @@ class SehuatangSignin(_PluginBase):
         if not self._notify:
             return
         title = f"🔐 98验证码 - {account_id}"
+        if cap_type == "打开后获取":
+            captcha_line = "验证码：打开页面后现场获取"
+        else:
+            captcha_line = f"验证码类型：{cap_type}"
         text = (
             f"账号：{account_id}\n"
-            f"验证码类型：{cap_type}\n\n"
+            f"{captcha_line}\n\n"
             f"人工操作地址：\n{url}\n\n"
-            f"请在 {self._captcha_timeout // 60} 分钟内打开并完成验证。\n"
-            f"按页面提示完成 slide/rotate/click 后提交。"
+            f"请先打开页面；后台会在页面打开后现场获取验证码。\n"
+            f"验证码显示后约 {self._captcha_site_ttl} 秒内完成，过期会自动刷新下一轮。"
         )
         logger.info(f"[SehuatangSignin] 验证码通知内容:\n{title}\n{text}")
         self.post_message(mtype=NotificationType.Plugin, title=title, text=text)
