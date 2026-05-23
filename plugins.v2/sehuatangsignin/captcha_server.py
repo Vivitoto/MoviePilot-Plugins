@@ -230,7 +230,7 @@ CAPTCHA_HTML = """<!DOCTYPE html>
   .rotate-stage { box-sizing: content-box; width: {{ master_w }}px; height: {{ master_h }}px; margin: 8px auto; position: relative; border-radius: 8px; overflow:hidden; border:2px solid #0f3460; background:#0b1024; }
   .rotate-master { width: {{ master_w }}px; height: {{ master_h }}px; display:block; object-fit: fill; image-rendering: auto; }
   .rotate-thumb { position:absolute; left:50%; top:50%; width:{{ tw }}px; height:{{ th }}px; margin-left: calc(-{{ tw }}px / 2); margin-top: calc(-{{ th }}px / 2); transform: rotate(0deg); transform-origin: 50% 50%; object-fit: fill; image-rendering: auto; }
-  .thumb-preview { box-sizing: content-box; display:block; max-width:none; margin:8px auto; border-radius:6px; border:1px solid #0f3460; background:#0b1024; object-fit: fill; image-rendering: auto; }
+  .thumb-preview { box-sizing: content-box; display:block; max-width:none; margin:8px auto; border-radius:6px; border:1px solid #0f3460; background:#fff; padding:6px; object-fit: fill; image-rendering: auto; }
   .range { width: 100%; accent-color: #e94560; }
   .status-bar { text-align: center; margin: 8px 0; font-size: 0.9em; line-height:1.6; }
   .coord { color: #e94560; font-weight: bold; word-break: break-all; }
