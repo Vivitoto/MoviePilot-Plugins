@@ -52,7 +52,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1162,6 +1162,8 @@ class SehuatangSignin(_PluginBase):
             if account and isinstance(info, dict) and info:
                 merged = dict(user_info_map.get(account) or {})
                 merged.update(info)
+                if not info.get("error"):
+                    merged.pop("error", None)
                 user_info_map[account] = merged
         self.save_data(self._user_info_key, user_info_map)
         return user_info_map
