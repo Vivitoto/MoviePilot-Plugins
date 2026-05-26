@@ -28,13 +28,13 @@ except Exception as err:  # pragma: no cover - depends on MoviePilot runtime ima
     _cloak_import_error = err
 
 
-class WeWorkIPPWCB(_PluginBase):
+class WeWorkIPCB(_PluginBase):
     # 插件名称
-    plugin_name = "企微配置IPpw版Cloak自用"
+    plugin_name = "企微配置IP Cloak自用版"
     # 插件描述
     plugin_desc = "自用版：适配 MoviePilot 新浏览器内核，定时获取最新动态公网IP，配置到企业微信应用的可信IP列表里。"
     # 插件图标
-    plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkippwcb.png"
+    plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb.png"
     # 插件版本
     plugin_version = "2.5.0"
     # 插件作者
@@ -42,7 +42,7 @@ class WeWorkIPPWCB(_PluginBase):
     # 作者主页
     author_url = "https://github.com/Vivitoto"
     # 插件配置项ID前缀
-    plugin_config_prefix = "weworkippwcb_"
+    plugin_config_prefix = "weworkipcb_"
     # 加载顺序
     plugin_order = 20
     # 可使用的用户级别
@@ -198,7 +198,7 @@ class WeWorkIPPWCB(_PluginBase):
 
         if event:
             event_data = event.event_data
-            if not event_data or event_data.get("action") != "weworkippwcb":
+            if not event_data or event_data.get("action") != "weworkipcb":
                 return
             logger.info("收到命令，开始检测公网IP ...")
             self.post_message(channel=event.event_data.get("channel"),
@@ -637,12 +637,12 @@ class WeWorkIPPWCB(_PluginBase):
         :return: 命令关键字、事件、描述、附带数据
         """
         return [{
-            "cmd": "/weworkippwcb",
+            "cmd": "/weworkipcb",
             "event": EventType.PluginAction,
             "desc": "微信应用检测动态IP",
             "category": "",
             "data": {
-                "action": "weworkippwcb"
+                "action": "weworkipcb"
             }
         }]
 
@@ -659,7 +659,7 @@ class WeWorkIPPWCB(_PluginBase):
         """
         if self._enabled and self._check_cron:
             return [{
-                "id": "WeWorkIPPWCB",
+                "id": "WeWorkIPCB",
                 "name": "微信应用自动配置动态公网IP",
                 "trigger": CronTrigger.from_crontab(self._check_cron),
                 "func": self.check,
@@ -1111,7 +1111,7 @@ class WeWorkIPPWCB(_PluginBase):
                 ],
             }
         ]
-        img_src = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkippwcb.png"
+        img_src = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb-loading.gif"
         if self._cookie_valid or not self._enabled:
             qr_tip = ""
         elif os.path.exists(self.qr_path):
