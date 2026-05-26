@@ -49,5 +49,17 @@
       "v1.0.3": "优化详情页、配置页与通知文案：详情页顶部改为执行总览并移除插件名/副标题/版本展示；放宽配置项内部上下间距，优化多账号行列宽；汇总通知精简为“98签到完成：x/y 成功”，正文不再重复标题。",
       "v1.0.2": "修正验证码通过后的成功判定与多账号限流：check OK 后 sign_v2 返回“验证超时”且最终状态不可取时按成功兜底；按 HAR 中页面刷新按钮的浏览器 fetch 形态刷新验证码并提交 sign_v2；drag/未知验证码按 15-30 秒流控刷新；配置页精简为基本配置、账号、访问验证码、签到通知，移除并行处理与主定时签到服务。"
     }
+  },
+  "WeWorkIPPWCB": {
+    "name": "企微配置IPpw版Cloak自用",
+    "description": "自用版：适配 MoviePilot 新浏览器内核，定时获取最新动态公网IP，配置到企业微信应用可信IP列表。",
+    "labels": "企业微信,动态IP,自动化,Cloak浏览器,自用",
+    "version": "2.5.0",
+    "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkippwcb.png",
+    "author": "Vivitoto",
+    "level": 2,
+    "history": {
+      "v2.5.0": "基于 suraxiuxiu WeWorkIPPW 2.4.2 与 issue #37 评论脚本制作自用版：插件 ID 改为 weworkippwcb，适配 MoviePilot 新浏览器内核 cloakbrowser，图标改为本仓库托管，并增加 cloakbrowser 缺失时的明确报错。"
+    }
   }
 }
