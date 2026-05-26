@@ -36,7 +36,7 @@ class WeWorkIPCB(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb.png"
     # 插件版本
-    plugin_version = "2.5.0"
+    plugin_version = "2.5.1"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -1111,7 +1111,7 @@ class WeWorkIPCB(_PluginBase):
                 ],
             }
         ]
-        img_src = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb-loading.gif"
+        img_src = "https://gitee.com/vivitoto97/MoviePilot-Plugins/raw/main/icons/weworkipcb-loading.gif"
         if self._cookie_valid or not self._enabled:
             qr_tip = ""
         elif os.path.exists(self.qr_path):
