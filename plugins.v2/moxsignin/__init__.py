@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -956,39 +956,7 @@ class MoxSignIn(_PluginBase):
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
 
-            # ── 失败重试调度 ──────────────────────────────────────────────
-            if result.get("result_label") == "失败" and self._retry_count > 0:
-                # 检查是否已有待执行的重试任务，避免重复排队
-                existing_jobs = [j.id for j in self._scheduler.get_jobs()]
-                if f"{self.plugin_config_prefix}retry" not in existing_jobs:
-                    retry_state = self.get_data(self._retry_state_key) or {}
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    if retry_state.get("date") != today:
-                        retry_state = {"date": today, "attempt": 0}
-                    retry_state["attempt"] = retry_state.get("attempt", 0) + 1
-                    if retry_state["attempt"] <= self._retry_count:
-                        next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
-                        self._scheduler.add_job(
-                            func=self._retry_wrapper,
-                            trigger="date",
-                            run_date=next_retry_time,
-                            id=f"{self.plugin_config_prefix}retry",
-                            name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
-                            kwargs={"attempt": retry_state["attempt"]},
-                            replace=True,
-                        )
-                        self._log_step(
-                            f"签到失败，第 {retry_state['attempt']} 次重试已安排在 "
-                            f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
-                        )
-                        retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
-                        retry_state["attempt"] = self._retry_count
-                    self.save_data(self._retry_state_key, retry_state)
-            elif result.get("result_label") == "成功":
-                if self.get_data(self._retry_state_key):
-                    self.save_data(self._retry_state_key, None)
+            self._handle_retry_after_result(result, "签到失败")
             return result
         except Exception as e:
             steps.append(f"💥 执行失败：{str(e)}")
@@ -1005,39 +973,53 @@ class MoxSignIn(_PluginBase):
             if self._notify:
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
 
-            # ── 失败重试调度（异常路径）────────────────────────────────────
-            if result.get("result_label") == "失败" and self._retry_count > 0:
-                existing_jobs = [j.id for j in self._scheduler.get_jobs()]
-                if f"{self.plugin_config_prefix}retry" not in existing_jobs:
-                    retry_state = self.get_data(self._retry_state_key) or {}
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    if retry_state.get("date") != today:
-                        retry_state = {"date": today, "attempt": 0}
-                    retry_state["attempt"] = retry_state.get("attempt", 0) + 1
-                    if retry_state["attempt"] <= self._retry_count:
-                        next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
-                        self._scheduler.add_job(
-                            func=self._retry_wrapper,
-                            trigger="date",
-                            run_date=next_retry_time,
-                            id=f"{self.plugin_config_prefix}retry",
-                            name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
-                            kwargs={"attempt": retry_state["attempt"]},
-                            replace=True,
-                        )
-                        self._log_step(
-                            f"签到失败（异常），第 {retry_state['attempt']} 次重试已安排在 "
-                            f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
-                        )
-                        retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
-                        retry_state["attempt"] = self._retry_count
-                    self.save_data(self._retry_state_key, retry_state)
-            elif result.get("result_label") == "成功":
-                if self.get_data(self._retry_state_key):
-                    self.save_data(self._retry_state_key, None)
+            self._handle_retry_after_result(result, "签到失败（异常）")
             return result
+
+    def _handle_retry_after_result(self, result: Dict[str, Any], reason: str):
+        """根据执行结果安排失败重试；兼容 MoviePilot 主调度器触发时内部调度器为空的情况。"""
+        if result.get("result_label") == "成功":
+            if self.get_data(self._retry_state_key):
+                self.save_data(self._retry_state_key, None)
+            return
+        if result.get("result_label") != "失败" or self._retry_count <= 0:
+            return
+
+        if not self._scheduler:
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+
+        # 检查是否已有待执行的重试任务，避免重复排队
+        existing_jobs = [j.id for j in self._scheduler.get_jobs()]
+        if f"{self.plugin_config_prefix}retry" in existing_jobs:
+            return
+
+        retry_state = self.get_data(self._retry_state_key) or {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        if retry_state.get("date") != today:
+            retry_state = {"date": today, "attempt": 0}
+        retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+        if retry_state["attempt"] <= self._retry_count:
+            next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+            self._scheduler.add_job(
+                func=self._retry_wrapper,
+                trigger="date",
+                run_date=next_retry_time,
+                id=f"{self.plugin_config_prefix}retry",
+                name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
+                kwargs={"attempt": retry_state["attempt"]},
+                replace=True,
+            )
+            if not self._scheduler.running:
+                self._scheduler.start()
+            self._log_step(
+                f"{reason}，第 {retry_state['attempt']} 次重试已安排在 "
+                f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
+            )
+            retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
+            retry_state["attempt"] = self._retry_count
+        self.save_data(self._retry_state_key, retry_state)
 
     def _retry_wrapper(self, attempt: int):
         """由 APScheduler 调用的重试入口，避免直接传递 self.run_once（不可序列化）"""
