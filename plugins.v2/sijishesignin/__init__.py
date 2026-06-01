@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -553,45 +553,75 @@ class SijisheSignIn(_PluginBase):
         return self._fs_call(payload)
 
     def _parse_user_info_html(self, html_text: str, uid: Optional[str] = None) -> Dict[str, Any]:
-        def pick(pattern: str) -> Optional[str]:
-            m = re.search(pattern, html_text, re.S)
+        raw_html = html.unescape(html_text or "")
+        # 司机社页面会把资产写成多种结构，例如：
+        #   <em>积分</em><span>123</span>
+        #   积分：123
+        #   积分</em> 123
+        # 旧规则只允许 label 后面跟闭合标签，遇到 <span>/<a> 等开放标签会解析成 '-'。
+        text_for_search = re.sub(r'<!--.*?-->', ' ', raw_html, flags=re.S)
+        text_for_search = re.sub(r'<br\s*/?>', '\n', text_for_search, flags=re.I)
+        text_for_search = re.sub(r'</(?:li|p|div|tr|td|th|span|em|dd|dt)>', ' ', text_for_search, flags=re.I)
+        text_for_search = re.sub(r'<[^>]+>', ' ', text_for_search)
+        text_for_search = re.sub(r'\s+', ' ', text_for_search)
+
+        def pick(pattern: str, source: Optional[str] = None) -> Optional[str]:
+            m = re.search(pattern, source if source is not None else raw_html, re.S | re.I)
             return html.unescape(m.group(1)).strip().strip(',') if m else None
+
         def pick_any(patterns):
             for p in patterns:
                 v = pick(p)
                 if v:
                     return v
             return None
+
+        def pick_labeled_number(label: str) -> Optional[str]:
+            # label 后允许冒号、空白、任意 HTML 标签，再取第一个数字；积分要避开“积分等级”。
+            html_label = r'积分(?!等级)' if label == '积分' else re.escape(label)
+            text_label = r'积分(?!等级)' if label == '积分' else re.escape(label)
+            patterns = [
+                rf'{html_label}\s*(?:[：:=]|&nbsp;|\s|</?[^>]+>)*([+-]?\d[\d,]*)',
+                rf'{text_label}\s*[：:=\s]+([+-]?\d[\d,]*)',
+            ]
+            for pattern in patterns:
+                source = text_for_search if '<' not in pattern else raw_html
+                v = pick(pattern, source=source)
+                if v:
+                    return v.lstrip('+')
+            return None
+
         info = {
             "username": self._username,
             "uid": uid,
-            "credits": pick_any([
-                r'积分\s*(?:</[^>]+>\s*)*([\d,]+)',
-                r'积分[：:]\s*([\d,]+)',
-                r'积分</em>\s*([\d,]+)',
+            "credits": pick_labeled_number('积分'),
+            "prestige": pick_labeled_number('威望'),
+            "tickets": pick_labeled_number('车票'),
+            "contribution": pick_labeled_number('贡献'),
+            "reg_time": pick_any([
+                r'注册时间\s*(?:[：:]|</?[^>]+>|\s)*([^<\n]{4,40})',
+                r'注册时间\s*([\d\-:\s]+)',
             ]),
-            "prestige": pick_any([
-                r'威望\s*(?:</[^>]+>\s*)*([\d,]+)',
-                r'威望[：:]\s*([\d,]+)',
-                r'威望</em>\s*([\d,]+)',
+            "last_visit": pick_any([
+                r'最后访问\s*(?:[：:]|</?[^>]+>|\s)*([^<\n]{4,40})',
+                r'最后访问\s*([\d\-:\s]+)',
             ]),
-            "tickets": pick_any([
-                r'车票\s*(?:</[^>]+>\s*)*([\d,]+)',
-                r'车票[：:]\s*([\d,]+)',
-                r'车票</em>\s*([\d,]+)',
-            ]),
-            "contribution": pick_any([
-                r'贡献\s*(?:</[^>]+>\s*)*([\d,]+)',
-                r'贡献[：:]\s*([\d,]+)',
-                r'贡献</em>\s*([\d,]+)',
-            ]),
-            "reg_time": pick(r'注册时间</em>([^<]+)</li>') or pick(r'注册时间\s*([\d\-:\s]+)'),
-            "last_visit": pick(r'最后访问</em>([^<]+)</li>') or pick(r'最后访问\s*([\d\-:\s]+)'),
         }
-        group_match = re.search(r'Lv\.[^<\s]+[^<]{0,20}', html_text)
-        info["user_group"] = html.unescape(group_match.group(0)).strip() if group_match else pick(r'用户组\s*(?:</[^>]+>\s*)*([^<\n]+)')
+        group_match = re.search(r'Lv\.[^<\s]+[^<]{0,20}', raw_html)
+        info["user_group"] = html.unescape(group_match.group(0)).strip() if group_match else pick(r'用户组\s*(?:[：:]|</?[^>]+>|\s)*([^<\n]+)')
         self._log_step(f"解析用户信息结果：积分={info.get('credits') or '-'} 威望={info.get('prestige') or '-'} 车票={info.get('tickets') or '-'} 贡献={info.get('contribution') or '-'} 用户组={info.get('user_group') or '-'}")
         return info
+
+    def _has_asset_info(self, info: Optional[Dict[str, Any]]) -> bool:
+        return bool(info and any(info.get(field) for field in ("credits", "prestige", "tickets", "contribution")))
+
+    def _merge_user_info(self, base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not extra:
+            return base
+        for key, val in extra.items():
+            if val and not base.get(key):
+                base[key] = val
+        return base
 
     def _save_asset_point(self, user_info: Dict[str, Any]):
         today = datetime.now().strftime("%Y-%m-%d")
@@ -619,10 +649,24 @@ class SijisheSignIn(_PluginBase):
         if not uid:
             self._log_step("刷新用户信息失败：无法确定 UID")
             return None
-        self._log_step(f"刷新用户资料页: {self._base_url}/home.php?mod=space&uid={uid}")
-        resp = session.get(f"{self._base_url}/home.php?mod=space&uid={uid}", timeout=self._timeout)
-        resp.raise_for_status()
-        info = self._parse_user_info_html(resp.text, uid=uid)
+
+        urls = [
+            f"{self._base_url}/home.php?mod=space&uid={uid}",
+            f"{self._base_url}/home.php?mod=space&uid={uid}&do=profile",
+            f"{self._base_url}/home.php?mod=spacecp&ac=credit&showcredit=1",
+        ]
+        info: Optional[Dict[str, Any]] = None
+        for index, url in enumerate(urls):
+            self._log_step(f"刷新用户资料页: {url}" if index == 0 else f"资料页未解析到资产，尝试备用页面: {url}")
+            resp = session.get(url, timeout=self._timeout)
+            resp.raise_for_status()
+            parsed = self._parse_user_info_html(resp.text, uid=uid)
+            info = self._merge_user_info(info or parsed, parsed)
+            if self._has_asset_info(info):
+                break
+
+        if not info:
+            return None
         self.save_data(self._user_info_key, info)
         self._save_asset_point(info)
         self._log_step(f"用户信息已刷新：积分={info.get('credits') or '-'} 威望={info.get('prestige') or '-'} 贡献={info.get('contribution') or '-'}")
@@ -642,6 +686,12 @@ class SijisheSignIn(_PluginBase):
         if not text:
             return None
         text = html.unescape(text)
+        visible_text = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', text, flags=re.S)
+        visible_text = re.sub(r'<[^>]+>', ' ', visible_text)
+        visible_text = re.sub(r'\s+', ' ', visible_text).strip()
+        if not visible_text:
+            self._log_step("签到响应未包含奖励文本，将尝试通过签到前后资产对比兜底")
+            return None
         patterns = [
             r'获得\s*([^<\n]{1,40})',
             r'奖励[：:]\s*([^<\n]{1,30})',
@@ -655,7 +705,7 @@ class SijisheSignIn(_PluginBase):
             r'车票\s*(\d+)',
         ]
         for p in patterns:
-            m = re.search(p, text)
+            m = re.search(p, text) or re.search(p, visible_text)
             if m:
                 reward = m.group(1).strip()
                 if reward.isdigit():
@@ -675,17 +725,31 @@ class SijisheSignIn(_PluginBase):
             elif "威望" in ctx:
                 field = "威望"
             return f"{field} +{num}"
-        self._log_step(f"奖励提取失败，原始文本片段：{text[:200].replace(chr(10),' ').replace(chr(13),' ')}")
+        self._log_step(f"奖励文本未匹配，响应片段：{text[:200].replace(chr(10),' ').replace(chr(13),' ')}")
         return None
 
     def _refresh_user_info_fs(self, sid: str, uid: Optional[str] = None):
         target_uid = uid or self._uid or '747026'
-        data = self._fs_get(sid, f"{self._base_url}/home.php?mod=space&uid={target_uid}")
-        sol = data.get("solution", {})
-        html_text = sol.get("response") or ""
-        if not uid:
-            uid = self._extract_uid_from_fs_cookies(sol.get("cookies") or []) or self._uid or '747026'
-        info = self._parse_user_info_html(html_text, uid=uid)
+        urls = [
+            f"{self._base_url}/home.php?mod=space&uid={target_uid}",
+            f"{self._base_url}/home.php?mod=space&uid={target_uid}&do=profile",
+            f"{self._base_url}/home.php?mod=spacecp&ac=credit&showcredit=1",
+        ]
+        info: Optional[Dict[str, Any]] = None
+        for index, url in enumerate(urls):
+            if index > 0:
+                self._log_step(f"资料页未解析到资产，尝试备用页面: {url}")
+            data = self._fs_get(sid, url)
+            sol = data.get("solution", {})
+            html_text = sol.get("response") or ""
+            if not uid:
+                uid = self._extract_uid_from_fs_cookies(sol.get("cookies") or []) or self._uid or target_uid
+            parsed = self._parse_user_info_html(html_text, uid=uid)
+            info = self._merge_user_info(info or parsed, parsed)
+            if self._has_asset_info(info):
+                break
+        if not info:
+            return None
         self.save_data(self._user_info_key, info)
         self._save_asset_point(info)
         return info
