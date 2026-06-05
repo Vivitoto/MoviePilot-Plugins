@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -424,6 +424,29 @@ class MoxSignIn(_PluginBase):
             session.proxies.update({"http": self._proxy_url, "https": self._proxy_url})
         return session
 
+    def _get_with_retry(self, session: requests.Session, url: str, label: str, **kwargs) -> requests.Response:
+        """GET helper for flaky WebDAV/forum pages.
+
+        Mox occasionally closes the response before the declared content-length
+        is fully read. Retrying idempotent GET requests avoids failing the whole
+        sign-in flow on a transient IncompleteRead while keeping POST sign-in
+        requests single-shot.
+        """
+        attempts = 3
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = session.get(url, timeout=self._timeout, **kwargs)
+                resp.raise_for_status()
+                return resp
+            except RequestException as e:
+                last_error = e
+                if attempt < attempts:
+                    wait_seconds = min(2 * attempt, 5)
+                    self._log_step(f"{label}失败，{wait_seconds} 秒后重试（{attempt}/{attempts}）：{e}")
+                    time.sleep(wait_seconds)
+        raise last_error
+
     def _extract_csrf(self, html_text: str) -> str:
         match = re.search(r'csrf-token" content="([^"]+)"', html_text)
         if not match:
@@ -442,8 +465,7 @@ class MoxSignIn(_PluginBase):
 
     def _captcha(self, session: requests.Session) -> Dict[str, str]:
         try:
-            resp = session.get(f"{self._base_url}/api/forum/captcha/generate", timeout=self._timeout)
-            resp.raise_for_status()
+            resp = self._get_with_retry(session, f"{self._base_url}/api/forum/captcha/generate", "获取验证码")
             data = resp.json()
         except RequestException as e:
             raise RuntimeError(f"获取验证码失败：{e}") from e
@@ -453,8 +475,7 @@ class MoxSignIn(_PluginBase):
 
     def _login(self, session: requests.Session):
         try:
-            resp = session.get(f"{self._base_url}/login", timeout=self._timeout)
-            resp.raise_for_status()
+            resp = self._get_with_retry(session, f"{self._base_url}/login", "打开登录页")
         except RequestException as e:
             raise RuntimeError(f"打开登录页失败：{e}") from e
         csrf = self._extract_csrf(resp.text)
@@ -479,8 +500,7 @@ class MoxSignIn(_PluginBase):
 
     def _load_sign_page(self, session: requests.Session) -> Tuple[str, Dict[str, Any]]:
         try:
-            resp = session.get(f"{self._base_url}/forum/sign", timeout=self._timeout)
-            resp.raise_for_status()
+            resp = self._get_with_retry(session, f"{self._base_url}/forum/sign", "打开签到页")
         except RequestException as e:
             raise RuntimeError(f"打开签到页失败：{e}") from e
         csrf = self._extract_csrf(resp.text)
@@ -690,8 +710,7 @@ class MoxSignIn(_PluginBase):
             profile_url = f"{self._base_url}/forum/profile/{self._user_id}"
 
         if not profile_url:
-            home_resp = session.get(f"{self._base_url}/forum/sign", timeout=self._timeout)
-            home_resp.raise_for_status()
+            home_resp = self._get_with_retry(session, f"{self._base_url}/forum/sign", "打开签到页")
             match = re.search(r'/forum/profile/(\d+)', home_resp.text)
             if match:
                 user_id = match.group(1)
@@ -702,8 +721,7 @@ class MoxSignIn(_PluginBase):
 
         user_info['profile_url'] = profile_url
         user_info['user_id'] = str(user_id or self._user_id or '')
-        resp = session.get(profile_url, timeout=self._timeout)
-        resp.raise_for_status()
+        resp = self._get_with_retry(session, profile_url, "打开用户主页")
         self._log_step(f"已获取用户主页：{profile_url}")
         html_text = resp.text
         text = re.sub(r'<[^>]+>', '\n', html_text)
