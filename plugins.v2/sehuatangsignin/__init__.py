@@ -25,11 +25,13 @@ from app.schemas.types import EventType
 from .captcha_server import (
     check_sign_status,
     complete_signin,
+    defer_site_captcha_requests,
     destroy_session,
     fetch_captcha_for_account,
     fs_create_session,
     fs_destroy_session,
     fs_get,
+    get_site_captcha_wait_seconds,
     get_answer,
     get_solved_at,
     init_session,
@@ -46,6 +48,7 @@ from .captcha_server import (
     start_server,
     stop_server,
     submit_check,
+    wait_for_site_captcha_ready,
 )
 
 
@@ -53,7 +56,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -82,7 +85,6 @@ class SehuatangSignin(_PluginBase):
     # Target site / FlareSolverr
     _base_url = "https://sehuatang.net"
     _flaresolverr_url = "http://127.0.0.1:8191/v1"
-    _use_flaresolverr = True
 
     # Proxy（访问 98 需要）
     _proxy_url = ""
@@ -92,6 +94,7 @@ class SehuatangSignin(_PluginBase):
     _captcha_timeout = 300
     _captcha_fetch_timeout = 300
     _captcha_check_retries = 2
+    _captcha_fetch_max_retries = 4
     _captcha_min_interval = 8.0
     _captcha_site_ttl = 30
     _public_base_url = ""
@@ -127,7 +130,7 @@ class SehuatangSignin(_PluginBase):
                 # Main scheduled sign-in is intentionally disabled: this plugin
                 # now runs by manual command / one-shot save action only.
                 self._cron = ""
-                self._timeout = max(1, int(config.get("timeout") or 30))
+                self._timeout = self._safe_int(config.get("timeout"), 30, min_value=1)
                 self._random_account_order = bool(config.get("random_account_order", True))
                 self._reminder_enabled = bool(config.get("reminder_enabled", False))
                 self._reminder_cron = str(config.get("reminder_cron") or "0 21 * * *").strip()
@@ -146,7 +149,7 @@ class SehuatangSignin(_PluginBase):
                         self._account_names[idx] = account.get("name", "")
                         self._account_cookies[idx] = account.get("cookie_str", "")
 
-                saved_count = int(config.get("account_count") or 0)
+                saved_count = self._safe_int(config.get("account_count"), 0, min_value=0)
                 inferred_count = max(
                     [idx + 1 for idx, cookie in enumerate(self._account_cookies) if cookie] or
                     [min(len(legacy_accounts), self._account_slots) or 1]
@@ -155,17 +158,13 @@ class SehuatangSignin(_PluginBase):
 
                 self._base_url = str(config.get("base_url") or "https://sehuatang.net").strip().rstrip("/")
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191/v1").rstrip("/")
-                self._use_flaresolverr = config.get("use_flaresolverr", True)
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
-                self._captcha_port = max(1, int(config.get("captcha_port") or 5099))
-                self._captcha_timeout = max(60, int(config.get("captcha_timeout") or 300))
-                self._captcha_fetch_timeout = max(30, int(config.get("captcha_fetch_timeout") or 300))
-                self._captcha_check_retries = max(0, int(config.get("captcha_check_retries") or 2))
-                raw_min_interval = config.get("captcha_min_interval")
-                self._captcha_min_interval = max(
-                    0.0,
-                    float(8 if raw_min_interval is None or str(raw_min_interval).strip() == "" else raw_min_interval),
-                )
+                self._captcha_port = self._safe_int(config.get("captcha_port"), 5099, min_value=1)
+                self._captcha_timeout = self._safe_int(config.get("captcha_timeout"), 300, min_value=60)
+                self._captcha_fetch_timeout = self._safe_int(config.get("captcha_fetch_timeout"), 300, min_value=30)
+                self._captcha_check_retries = self._safe_int(config.get("captcha_check_retries"), 2, min_value=0)
+                self._captcha_fetch_max_retries = self._safe_int(config.get("captcha_fetch_max_retries"), 4, min_value=1, max_value=10)
+                self._captcha_min_interval = self._safe_float(config.get("captcha_min_interval"), 8, min_value=0.0)
                 self._public_base_url = str(config.get("public_base_url") or "").strip().rstrip("/")
                 self._parse_accounts()
 
@@ -198,6 +197,36 @@ class SehuatangSignin(_PluginBase):
     def get_state(self) -> bool:
         return self._enabled and bool(self._flaresolverr_url)
 
+    @staticmethod
+    def _safe_int(value, default: int, *, min_value: int | None = None, max_value: int | None = None) -> int:
+        try:
+            if value is None or str(value).strip() == "":
+                result = int(default)
+            else:
+                result = int(float(str(value).strip()))
+        except (TypeError, ValueError):
+            result = int(default)
+        if min_value is not None:
+            result = max(min_value, result)
+        if max_value is not None:
+            result = min(max_value, result)
+        return result
+
+    @staticmethod
+    def _safe_float(value, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
+        try:
+            if value is None or str(value).strip() == "":
+                result = float(default)
+            else:
+                result = float(str(value).strip())
+        except (TypeError, ValueError):
+            result = float(default)
+        if min_value is not None:
+            result = max(min_value, result)
+        if max_value is not None:
+            result = min(max_value, result)
+        return result
+
     def _update_config(self):
         account_lines = []
         for idx in range(self._account_slots):
@@ -217,11 +246,11 @@ class SehuatangSignin(_PluginBase):
             "accounts_text": "\n".join(account_lines),
             "base_url": self._base_url,
             "flaresolverr_url": self._flaresolverr_url,
-            "use_flaresolverr": self._use_flaresolverr,
             "proxy_url": self._proxy_url,
             "captcha_port": self._captcha_port, "captcha_timeout": self._captcha_timeout,
             "captcha_fetch_timeout": self._captcha_fetch_timeout,
             "captcha_check_retries": self._captcha_check_retries,
+            "captcha_fetch_max_retries": self._captcha_fetch_max_retries,
             "captcha_min_interval": self._captcha_min_interval,
             "public_base_url": self._public_base_url,
         }
@@ -501,7 +530,6 @@ class SehuatangSignin(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'use_flaresolverr', 'label': '使用 FlareSolverr', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
                                     ]
@@ -539,7 +567,8 @@ class SehuatangSignin(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_min_interval', 'label': '验证码接口间隔(秒)', 'type': 'number', 'placeholder': '8', 'hint': '跨账号全局节流；每次 fetch/check 后至少等待该秒数再请求，降低 429 风险', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_max_retries', 'label': '单轮最多取验证码', 'type': 'number', 'placeholder': '4', 'hint': '遇到 drag/未知类型时最多刷新次数，建议 3-6', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_min_interval', 'label': '验证码接口间隔(秒)', 'type': 'number', 'placeholder': '8', 'hint': '跨账号全局节流；发验证码链接前会先等到可请求，用户点击后尽量马上获取', 'persistent-hint': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com', 'hint': '用于通知里的人工验证码链接；留空时使用本机端口地址', 'persistent-hint': True}}]},
                                     ]
                                 }
@@ -616,9 +645,9 @@ class SehuatangSignin(_PluginBase):
             "account_20_name": "", "account_20_cookie": "",
             "base_url": "https://sehuatang.net",
             "flaresolverr_url": "http://127.0.0.1:8191/v1",
-            "use_flaresolverr": True,
             "proxy_url": "", "captcha_port": 5099, "captcha_timeout": 300,
             "captcha_fetch_timeout": 300, "captcha_check_retries": 2,
+            "captcha_fetch_max_retries": 4,
             "captcha_min_interval": 8,
             "public_base_url": "",
         }
@@ -743,6 +772,16 @@ class SehuatangSignin(_PluginBase):
                     steps.append(f"验证码重试：第 {round_no}/{max_rounds} 轮")
                     logger.info(f"[SehuatangSignin] [{account_id}] 验证码失败后重试，第 {round_no}/{max_rounds} 轮")
 
+                wait_seconds = get_site_captcha_wait_seconds()
+                if wait_seconds > 1:
+                    steps.append(f"验证码接口流控等待：{wait_seconds:.1f}秒后发送链接")
+                    self._send_captcha_wait_notification(account_id, wait_seconds)
+                    logger.info(f"[SehuatangSignin] [{account_id}] 发验证码链接前等待全局流控 {wait_seconds:.1f} 秒")
+                with self._captcha_fetch_lock:
+                    waited = wait_for_site_captcha_ready()
+                if waited > 1:
+                    logger.info(f"[SehuatangSignin] [{account_id}] 全局流控等待完成，准备发送验证码链接: {waited:.1f} 秒")
+
                 captcha_session_id = f"{account_id}-{uuid.uuid4().hex[:8]}"
                 init_session(captcha_session_id, account_id)
                 captcha_session_active = True
@@ -769,13 +808,13 @@ class SehuatangSignin(_PluginBase):
 
                 logger.info(
                     f"[SehuatangSignin] [{account_id}] 开始现场获取验证码，"
-                    f"最长 {self._captcha_fetch_timeout} 秒，最多 4 次；每次请求会走全局节流"
+                    f"最长 {self._captcha_fetch_timeout} 秒，最多 {self._captcha_fetch_max_retries} 次；点击后不再等待上一账号流控"
                 )
                 with self._captcha_fetch_lock:
                     captcha_data = fetch_captcha_for_account(
                         fs_sid,
                         cookies,
-                        max_retries=4,
+                        max_retries=self._captcha_fetch_max_retries,
                         max_wait_seconds=self._captcha_fetch_timeout,
                     )
                 if not captcha_data:
@@ -843,17 +882,18 @@ class SehuatangSignin(_PluginBase):
                 answer = get_answer(captcha_session_id)
                 steps.append(f"用户提交：{answer}")
                 logger.info(f"[SehuatangSignin] [{account_id}] 等待全局验证码接口锁，提交 check: {answer}")
+                cooldown = 0.0
                 with self._captcha_fetch_lock, site_captcha_lock():
                     ok, check_result = submit_check(fs_sid, answer, cap_type, cookies)
 
-                    if not ok and check_result.get("data") not in ("safe_gate", "cf_challenge") and round_no < max_rounds:
-                        cooldown = random.uniform(10, 15)
-                        steps.append(f"验证码失败全局冷却：{cooldown:.1f}秒后重试")
-                        logger.info(
-                            f"[SehuatangSignin] [{account_id}] 验证码 check 失败后全局冷却 {cooldown:.1f} 秒，"
-                            f"暂停其他账号验证码 fetch/check 以降低 429 风险"
-                        )
-                        time.sleep(cooldown)
+                if not ok and check_result.get("data") not in ("safe_gate", "cf_challenge") and round_no < max_rounds:
+                    cooldown = random.uniform(10, 15)
+                    deferred = defer_site_captcha_requests(cooldown)
+                    steps.append(f"验证码失败全局冷却：{deferred:.1f}秒后重试")
+                    logger.info(
+                        f"[SehuatangSignin] [{account_id}] 验证码 check 失败后设置全局冷却 {deferred:.1f} 秒，"
+                        f"下一轮发链接前等待完成以降低 429 风险"
+                    )
 
                 if ok:
                     steps.append("验证码通过 ✅")
@@ -1144,6 +1184,20 @@ class SehuatangSignin(_PluginBase):
         }
         return all(account_id in signed_accounts for account_id in indexed_accounts)
 
+    def _send_captcha_wait_notification(self, account_id: str, wait_seconds: float):
+        """Notify the user that the next captcha link will be sent after site-wide throttle."""
+        if not self._notify or wait_seconds <= 1:
+            return
+        title = f"⏳ 98验证码等待 - {account_id}"
+        text = (
+            f"账号：{account_id}\n"
+            f"为降低 429 风险，验证码接口正在全局流控。\n"
+            f"预计等待：{wait_seconds:.1f} 秒\n\n"
+            f"等待结束后会再发送验证码链接；收到链接后点击“开始获取验证码”应尽快出图。"
+        )
+        logger.info(f"[SehuatangSignin] 验证码等待通知内容:\n{title}\n{text}")
+        self.post_message(mtype=NotificationType.Plugin, title=title, text=text)
+
     def _send_captcha_notification(self, cap_type: str, url: str, account_id: str):
         """Send WeChat notification with captcha relay URL."""
         if not self._notify:
@@ -1157,7 +1211,8 @@ class SehuatangSignin(_PluginBase):
             f"账号：{account_id}\n"
             f"{captcha_line}\n\n"
             f"人工操作地址：\n{url}\n\n"
-            f"请先打开页面并点击“开始获取验证码”；后台收到确认后现场获取验证码。\n"
+            f"当前已完成发链接前的全局流控等待。\n"
+            f"请打开页面并点击“开始获取验证码”；后台收到确认后会立即请求验证码。\n"
             f"验证码显示后约 {self._captcha_site_ttl} 秒内完成，过期会自动刷新下一轮。"
         )
         logger.info(f"[SehuatangSignin] 验证码通知内容:\n{title}\n{text}")

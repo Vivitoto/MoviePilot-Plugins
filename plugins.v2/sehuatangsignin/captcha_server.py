@@ -121,21 +121,63 @@ def site_captcha_lock():
             _save_site_throttle_unlocked()
 
 
-def _wait_site_throttle_unlocked():
-    """Sleep until the next site captcha request is allowed. Caller holds site lock."""
-    if _SITE_CAPTCHA_MIN_INTERVAL_SECONDS <= 0:
-        return
+def wait_for_site_captcha_ready() -> float:
+    """Wait until a site captcha request can be sent, without consuming a new throttle slot."""
+    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
+        return _wait_site_throttle_unlocked()
+
+
+def get_site_captcha_wait_seconds() -> float:
+    """Return seconds until the next site captcha request is allowed."""
+    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
+        return max(0.0, _read_site_throttle_unlocked() - time.time())
+
+
+def defer_site_captcha_requests(seconds: float) -> float:
+    """Push the next allowed site captcha request into the future without sleeping."""
+    try:
+        delay = max(0.0, float(seconds or 0))
+    except (TypeError, ValueError):
+        delay = 0.0
+    if delay <= 0:
+        return 0.0
+    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
+        existing = _read_site_throttle_unlocked()
+        next_allowed = max(existing, time.time() + delay)
+        _write_site_throttle_unlocked(next_allowed)
+        return max(0.0, next_allowed - time.time())
+
+
+def _read_site_throttle_unlocked() -> float:
     try:
         with open(_SITE_CAPTCHA_THROTTLE_PATH, "r", encoding="utf-8") as f:
-            next_allowed = float((f.read() or "0").strip() or 0)
+            return float((f.read() or "0").strip() or 0)
     except FileNotFoundError:
-        next_allowed = 0
+        return 0.0
     except Exception:
-        next_allowed = 0
-    delay = next_allowed - time.time()
-    if delay > 0:
+        return 0.0
+
+
+def _write_site_throttle_unlocked(next_allowed: float):
+    directory = os.path.dirname(_SITE_CAPTCHA_THROTTLE_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(_SITE_CAPTCHA_THROTTLE_PATH, "w", encoding="utf-8") as f:
+        f.write(str(float(next_allowed or 0)))
+
+
+def _wait_site_throttle_unlocked() -> float:
+    """Sleep until the next site captcha request is allowed. Caller holds site lock."""
+    total_slept = 0.0
+    while True:
+        next_allowed = _read_site_throttle_unlocked()
+        delay = next_allowed - time.time()
+        if delay <= 0:
+            return total_slept
         logger.debug(f"[SehuatangCaptcha] Site captcha throttle sleep {delay:.1f}s")
-        time.sleep(min(delay, 60))
+        slept = min(delay, 60)
+        time.sleep(slept)
+        total_slept += slept
 
 
 def _save_site_throttle_unlocked():
@@ -143,13 +185,9 @@ def _save_site_throttle_unlocked():
     if _SITE_CAPTCHA_MIN_INTERVAL_SECONDS <= 0:
         return
     try:
-        directory = os.path.dirname(_SITE_CAPTCHA_THROTTLE_PATH)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
         jitter = random.uniform(0, min(3.0, _SITE_CAPTCHA_MIN_INTERVAL_SECONDS / 2))
         next_allowed = time.time() + _SITE_CAPTCHA_MIN_INTERVAL_SECONDS + jitter
-        with open(_SITE_CAPTCHA_THROTTLE_PATH, "w", encoding="utf-8") as f:
-            f.write(str(next_allowed))
+        _write_site_throttle_unlocked(next_allowed)
     except Exception as e:
         logger.debug(f"[SehuatangCaptcha] Failed to save site throttle state: {e}")
 
@@ -561,17 +599,12 @@ def create_app():
     @app.route("/__sht_health")
     def relay_health():
         with _sessions_lock, _session_store_lock():
-            sessions = _load_sessions_unlocked()
-            session_count = len(sessions)
-            sample_keys = list(sessions.keys())[:10]
+            session_count = len(_load_sessions_unlocked())
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.8",
-            "sessionStorePath": _SESSION_STORE_PATH,
-            "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
+            "version": "1.0.9",
             "sessionCount": session_count,
-            "sampleSessionKeys": sample_keys,
         }
 
     @app.route("/<path:account_id>")
@@ -642,16 +675,16 @@ def create_app():
                                                 route_path=quote(account_id, safe=""),
                                                 display_account=display_account, solved=False,
                                                 error="会话不存在或已过期，请重新获取验证码")
+            first_request = False
             if not session.get("requested"):
                 session["requested"] = True
                 session["requested_at"] = time.time()
                 _captcha_sessions[account_id] = session
                 _save_sessions_unlocked()
-        logger.info(f"[SehuatangCaptcha] Account {account_id}: user confirmed captcha fetch request")
-        return _render_captcha_template(account=account_id, route_account=account_id,
-                                        route_path=quote(account_id, safe=""),
-                                        display_account=display_account, captcha_ready=False,
-                                        solved=False, request_started=True, expire_seconds=0)
+                first_request = True
+        if first_request:
+            logger.info(f"[SehuatangCaptcha] Account {account_id}: user confirmed captcha fetch request")
+        return redirect(f"/{quote(account_id, safe='')}", code=303)
 
     @app.route("/<path:account_id>/submit", methods=["POST"])
     def captcha_submit(account_id):
