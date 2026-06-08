@@ -48,15 +48,17 @@ FS_URL_TEMPLATE = "{flaresolverr_url}"
 # memory spaces. The store contains captcha images/session ids, not account cookies.
 _captcha_sessions: dict = {}
 _sessions_lock = threading.Lock()
-_DEFAULT_SESSION_STORE_PATH = os.path.join("/var/tmp", "sehuatangsignin", "captcha_sessions.json")
+_DEFAULT_SESSION_STORE_PATH = os.path.join(tempfile.gettempdir(), "sehuatangsignin_captcha_sessions.json")
 _SESSION_STORE_PATH = os.environ.get("SEHUATANG_CAPTCHA_SESSION_STORE", _DEFAULT_SESSION_STORE_PATH)
-# Optional compatibility bridge for explicitly configured legacy relay stores.
-# Do not default to /tmp: MoviePilot/nginx may use /tmp for cache files and will
-# complain about arbitrary JSON files there ("cache file ... is too small").
-_LEGACY_SESSION_STORE_PATH = os.environ.get("SEHUATANG_CAPTCHA_LEGACY_SESSION_STORE", "").strip()
+# Compatibility bridge: older/stale relay instances may still read the default
+# temp-file store. Mirror session state there so producer and relay do not split-brain
+# during plugin hot reloads or reverse-proxy target drift.
+_LEGACY_SESSION_STORE_PATH = os.environ.get(
+    "SEHUATANG_CAPTCHA_LEGACY_SESSION_STORE",
+    _DEFAULT_SESSION_STORE_PATH,
+)
 _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
 _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
-_SITE_CAPTCHA_THROTTLE_PATH = f"{_SESSION_STORE_PATH}.site.next"
 try:
     _SESSION_MAX_AGE_SECONDS = max(
         3600,
@@ -69,14 +71,6 @@ try:
     _DEFAULT_CAPTCHA_SITE_TTL_SECONDS = max(10, int(os.environ.get("SEHUATANG_CAPTCHA_SITE_TTL_SECONDS", "30")))
 except ValueError:
     _DEFAULT_CAPTCHA_SITE_TTL_SECONDS = 30
-
-try:
-    _SITE_CAPTCHA_MIN_INTERVAL_SECONDS = max(
-        0.0,
-        float(os.environ.get("SEHUATANG_CAPTCHA_MIN_INTERVAL_SECONDS", "8")),
-    )
-except ValueError:
-    _SITE_CAPTCHA_MIN_INTERVAL_SECONDS = 8.0
 
 try:
     import fcntl
@@ -109,91 +103,9 @@ def _session_store_lock():
 
 @contextlib.contextmanager
 def site_captcha_lock():
-    """Cross-process short lock + minimum interval for captcha fetch endpoints."""
-    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
-        _wait_site_throttle_unlocked()
-        try:
-            yield
-        finally:
-            _save_site_throttle_unlocked()
-
-
-@contextlib.contextmanager
-def site_captcha_submit_lock():
-    """Cross-process mutex for captcha check submits; never wait throttle before user answer check."""
+    """Cross-process throttle lock for sehuatang captcha fetch/check endpoint."""
     with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
         yield
-
-
-def wait_for_site_captcha_ready() -> float:
-    """Wait until a site captcha request can be sent, without consuming a new throttle slot."""
-    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
-        return _wait_site_throttle_unlocked()
-
-
-def get_site_captcha_wait_seconds() -> float:
-    """Return seconds until the next site captcha request is allowed."""
-    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
-        return max(0.0, _read_site_throttle_unlocked() - time.time())
-
-
-def defer_site_captcha_requests(seconds: float) -> float:
-    """Push the next allowed site captcha request into the future without sleeping."""
-    try:
-        delay = max(0.0, float(seconds or 0))
-    except (TypeError, ValueError):
-        delay = 0.0
-    if delay <= 0:
-        return 0.0
-    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
-        existing = _read_site_throttle_unlocked()
-        next_allowed = max(existing, time.time() + delay)
-        _write_site_throttle_unlocked(next_allowed)
-        return max(0.0, next_allowed - time.time())
-
-
-def _read_site_throttle_unlocked() -> float:
-    try:
-        with open(_SITE_CAPTCHA_THROTTLE_PATH, "r", encoding="utf-8") as f:
-            return float((f.read() or "0").strip() or 0)
-    except FileNotFoundError:
-        return 0.0
-    except Exception:
-        return 0.0
-
-
-def _write_site_throttle_unlocked(next_allowed: float):
-    directory = os.path.dirname(_SITE_CAPTCHA_THROTTLE_PATH)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(_SITE_CAPTCHA_THROTTLE_PATH, "w", encoding="utf-8") as f:
-        f.write(str(float(next_allowed or 0)))
-
-
-def _wait_site_throttle_unlocked() -> float:
-    """Sleep until the next site captcha request is allowed. Caller holds site lock."""
-    total_slept = 0.0
-    while True:
-        next_allowed = _read_site_throttle_unlocked()
-        delay = next_allowed - time.time()
-        if delay <= 0:
-            return total_slept
-        logger.debug(f"[SehuatangCaptcha] Site captcha throttle sleep {delay:.1f}s")
-        slept = min(delay, 60)
-        time.sleep(slept)
-        total_slept += slept
-
-
-def _save_site_throttle_unlocked():
-    """Record the next allowed site captcha request time. Caller holds site lock."""
-    if _SITE_CAPTCHA_MIN_INTERVAL_SECONDS <= 0:
-        return
-    try:
-        jitter = random.uniform(0, min(3.0, _SITE_CAPTCHA_MIN_INTERVAL_SECONDS / 2))
-        next_allowed = time.time() + _SITE_CAPTCHA_MIN_INTERVAL_SECONDS + jitter
-        _write_site_throttle_unlocked(next_allowed)
-    except Exception as e:
-        logger.debug(f"[SehuatangCaptcha] Failed to save site throttle state: {e}")
 
 
 def _session_store_paths() -> list[str]:
@@ -394,19 +306,11 @@ CAPTCHA_HTML = """<!DOCTYPE html>
 
 {% else %}
 <div class="card" style="text-align:center">
-  {% if not request_started %}
-  <p>准备获取实时验证码</p>
-  <p class="info">为避免微信/反代/链接预览提前打开页面导致验证码过期，请在确认本人已打开页面后点击下面按钮。</p>
-  <form method="post" action="/{{ route_path or route_account or account }}/request">
-    <button class="btn" type="submit">▶️ 开始获取验证码</button>
-  </form>
-  {% else %}
   <p>正在获取验证码...</p>
-  <p class="info">后台正在现场获取验证码，避免通知延迟吃掉有效期。</p>
+  <p class="info">后台会在你打开本页面后现场获取验证码，避免通知延迟吃掉有效期。</p>
   <p class="info">页面会自动刷新，请保持打开。</p>
   <button class="btn btn-subtle" onclick="location.reload()">🔄 立即刷新</button>
   <script>setTimeout(function(){ location.reload(); }, 2000);</script>
-  {% endif %}
 </div>
 {% endif %}
 </div>
@@ -577,7 +481,6 @@ def _render_captcha_template(**kwargs):
         "answer": "",
         "display_account": "",
         "route_account": "",
-        "route_path": "",
         "captcha_type": "",
         "dx": 0,
         "dy": 0,
@@ -603,12 +506,17 @@ def create_app():
     @app.route("/__sht_health")
     def relay_health():
         with _sessions_lock, _session_store_lock():
-            session_count = len(_load_sessions_unlocked())
+            sessions = _load_sessions_unlocked()
+            session_count = len(sessions)
+            sample_keys = list(sessions.keys())[:10]
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.9",
+            "version": "1.0.5",
+            "sessionStorePath": _SESSION_STORE_PATH,
+            "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
+            "sampleSessionKeys": sample_keys,
         }
 
     @app.route("/<path:account_id>")
@@ -618,19 +526,25 @@ def create_app():
         with _sessions_lock, _session_store_lock():
             session = _load_sessions_unlocked().get(account_id)
         if not session:
-            return _render_captcha_template(account=account_id, route_path=quote(account_id, safe=""), captcha_ready=False,
+            return _render_captcha_template(account=account_id, captcha_ready=False,
                                             solved=False, error="会话不存在或已过期，请重新获取验证码")
+        if not session.get("requested"):
+            with _sessions_lock, _session_store_lock():
+                sessions = _load_sessions_unlocked()
+                session = sessions.get(account_id, session)
+                if session and not session.get("requested"):
+                    session["requested"] = True
+                    session["requested_at"] = time.time()
+                    _captcha_sessions[account_id] = session
+                    _save_sessions_unlocked()
+            logger.info(f"[SehuatangCaptcha] Account {account_id}: page opened, captcha fetch requested")
         display_account = session.get("account_id") or account_id
         if session.get("solved"):
             return _render_captcha_template(account=account_id, route_account=account_id,
-                                            route_path=quote(account_id, safe=""),
                                             display_account=display_account, captcha_ready=False,
                                             solved=True, answer=session.get("answer", ""))
         if not session.get("captcha_data"):
-            return _render_captcha_template(account=account_id, route_account=account_id,
-                                            route_path=quote(account_id, safe=""),
-                                            display_account=display_account, captcha_ready=False,
-                                            solved=False, request_started=bool(session.get("requested")),
+            return _render_captcha_template(account=account_id, captcha_ready=False, solved=False,
                                             expire_seconds=0)
 
         with _sessions_lock, _session_store_lock():
@@ -651,7 +565,6 @@ def create_app():
         return _render_captcha_template(
             account=account_id,
             route_account=account_id,
-            route_path=quote(account_id, safe=""),
             display_account=display_account,
             captcha_ready=True,
             solved=False,
@@ -667,28 +580,6 @@ def create_app():
             expire_seconds=max(0, int(float(session.get("site_expires_at") or (created_at + _DEFAULT_CAPTCHA_SITE_TTL_SECONDS)) - time.time())),
             debug_json=json.dumps(debug, ensure_ascii=False, indent=2),
         )
-
-    @app.route("/<path:account_id>/request", methods=["POST"])
-    def captcha_request(account_id):
-        with _sessions_lock, _session_store_lock():
-            sessions = _load_sessions_unlocked()
-            session = sessions.get(account_id)
-            display_account = session.get("account_id") if session else account_id
-            if not session:
-                return _render_captcha_template(account=account_id, route_account=account_id,
-                                                route_path=quote(account_id, safe=""),
-                                                display_account=display_account, solved=False,
-                                                error="会话不存在或已过期，请重新获取验证码")
-            first_request = False
-            if not session.get("requested"):
-                session["requested"] = True
-                session["requested_at"] = time.time()
-                _captcha_sessions[account_id] = session
-                _save_sessions_unlocked()
-                first_request = True
-        if first_request:
-            logger.info(f"[SehuatangCaptcha] Account {account_id}: user confirmed captcha fetch request")
-        return redirect(f"/{quote(account_id, safe='')}", code=303)
 
     @app.route("/<path:account_id>/submit", methods=["POST"])
     def captcha_submit(account_id):
@@ -828,14 +719,9 @@ def _get_fs_url() -> str:
     return _fs_url_cache
 
 
-def _looks_like_flaresolverr_api_url(url: str) -> bool:
-    clean = (url or "").strip().rstrip("/").lower()
-    return clean.endswith("/v1")
-
-
 def set_fs_url(url: str):
     global _fs_url_cache
-    _fs_url_cache = str(url or "").strip().rstrip("/")
+    _fs_url_cache = url.rstrip("/")
 
 
 def set_proxy_url(url: str):
@@ -843,18 +729,9 @@ def set_proxy_url(url: str):
     _proxy_url_cache = url.strip()
 
 
-def set_site_captcha_min_interval(seconds: float):
-    """Set cross-account minimum interval between site captcha fetch/check requests."""
-    global _SITE_CAPTCHA_MIN_INTERVAL_SECONDS
-    try:
-        _SITE_CAPTCHA_MIN_INTERVAL_SECONDS = max(0.0, float(seconds or 0))
-    except (TypeError, ValueError):
-        _SITE_CAPTCHA_MIN_INTERVAL_SECONDS = 8.0
-
-
 def set_session_store_path(path: str):
     """Set captcha session store path, preferably under MoviePilot plugin data dir."""
-    global _SESSION_STORE_PATH, _SESSION_LOCK_PATH, _SITE_CAPTCHA_LOCK_PATH, _SITE_CAPTCHA_THROTTLE_PATH
+    global _SESSION_STORE_PATH, _SESSION_LOCK_PATH, _SITE_CAPTCHA_LOCK_PATH
     clean = str(path or "").strip()
     if not clean:
         return
@@ -864,7 +741,6 @@ def set_session_store_path(path: str):
     _SESSION_STORE_PATH = clean
     _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
     _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
-    _SITE_CAPTCHA_THROTTLE_PATH = f"{_SESSION_STORE_PATH}.site.next"
     logger.info(f"[SehuatangCaptcha] Session store path: {_SESSION_STORE_PATH}")
 
 
@@ -907,9 +783,6 @@ def _merge_solution_cookies(cookies: list, solution_cookies: list):
 
 
 def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) -> dict:
-    fs_url = _get_fs_url()
-    if not _looks_like_flaresolverr_api_url(fs_url):
-        return {"error": "FlareSolverr API 地址必须填写完整 /v1 路径"}
     if session_id:
         payload["session"] = session_id
     if cookies:
@@ -917,15 +790,12 @@ def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) ->
     proxy = _proxy_param()
     if proxy:
         payload.update(proxy)
-    try:
-        r = requests.post(
-            FS_URL_TEMPLATE.format(flaresolverr_url=fs_url),
-            json=payload,
-            timeout=timeout + 10,
-        )
-        d = r.json()
-    except Exception as e:
-        return {"error": f"FlareSolverr 调用失败: {e}"}
+    r = requests.post(
+        FS_URL_TEMPLATE.format(flaresolverr_url=_get_fs_url()),
+        json=payload,
+        timeout=timeout + 10,
+    )
+    d = r.json()
     if d.get("status") != "ok":
         return {"error": d.get("message", "unknown")}
     sol = d.get("solution", {})
@@ -938,24 +808,16 @@ def fs_call(session_id: str, payload: dict, cookies: list, timeout: int = 60) ->
 
 
 def fs_create_session() -> str:
-    fs_url = _get_fs_url()
-    if not _looks_like_flaresolverr_api_url(fs_url):
-        logger.warning("[SehuatangCaptcha] FlareSolverr API 地址必须填写完整 /v1 路径")
-        return ""
     payload = {"cmd": "sessions.create", "maxTimeout": 90000}
     proxy = _proxy_param()
     if proxy:
         payload.update(proxy)
-    try:
-        r = requests.post(
-            FS_URL_TEMPLATE.format(flaresolverr_url=fs_url),
-            json=payload,
-            timeout=15,
-        )
-        d = r.json()
-    except Exception as e:
-        logger.warning(f"[SehuatangCaptcha] FlareSolverr 会话创建失败: {e}")
-        return ""
+    r = requests.post(
+        FS_URL_TEMPLATE.format(flaresolverr_url=_get_fs_url()),
+        json=payload,
+        timeout=15,
+    )
+    d = r.json()
     return d.get("session", "") if d.get("status") == "ok" else ""
 
 
@@ -1013,22 +875,7 @@ def _check_headers(fs_sid: str) -> dict:
     return _browser_fetch_headers(fs_sid, content_type="text/plain", include_origin=True)
 
 
-def _is_cf_challenge_html(html: str) -> bool:
-    if not html:
-        return False
-    lower = html.lower()
-    return any(marker in lower for marker in (
-        "enable javascript and cookies to continue",
-        "challenge-error-text",
-        "_cf_chl_opt",
-        "cf-challenge",
-        "cf_chl_",
-    ))
-
-
 def _parse_check_html(html: str) -> dict:
-    if _is_cf_challenge_html(html):
-        return {"code": 403, "message": "Cloudflare challenge returned", "data": "cf_challenge", "raw": html[:300]}
     if "static/safe/js/web.js" in html or "enter-btn" in html or "safeid=" in html:
         return {"code": 403, "message": "safe gate returned", "data": "safe_gate", "raw": html[:300]}
     m = re.search(r"<body>(.+?)</body>", html, re.S)
@@ -1083,13 +930,26 @@ def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
 
 
 def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
-    # Check endpoint is sensitive to browser/XHR context. FlareSolverr request.post
-    # has repeatedly produced safe_gate even when the user solved a fresh captcha,
-    # so captcha check must not fall back to FS POST. Let upper layers retry a fresh
-    # captcha on direct_error/cf_challenge instead of converting it into safe_gate.
+    # Check endpoint is sensitive to browser/XHR context. Direct requests with
+    # FS-updated cookies has proven closer than FlareSolverr request.post, which
+    # can trigger safe_gate and invalidate the current captcha state.
     direct_result = _direct_check_post(fs_sid, url, body, cookies)
-    logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
-    return direct_result
+    if direct_result.get("data") != "direct_error":
+        logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
+        return direct_result
+
+    r = fs_call(fs_sid, {
+        "cmd": "request.post",
+        "url": url,
+        "postData": body,
+        "headers": _check_headers(fs_sid),
+        "maxTimeout": 30000,
+    }, cookies)
+    html = r.get("html", "")
+    result = _parse_check_html(html)
+    result.setdefault("via", "flaresolverr")
+    logger.info(f"[SehuatangCaptcha] Direct check failed; FlareSolverr check result: {result.get('data')}")
+    return result
 
 
 def extract_json(html: str) -> dict:
@@ -1118,8 +978,6 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
     captcha appears, the endpoint rate-limits, or the total wait cap expires.
     """
     supported_types = {"slide", "rotate", "click"}
-    if max_retries is None:
-        max_retries = 4
     attempt = 0
     deadline = time.time() + max(1, int(max_wait_seconds or 300))
     while (max_retries is None or attempt < max_retries) and time.time() < deadline:
@@ -1134,8 +992,7 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
             delay = min(random.uniform(15, 30), remaining)
             logger.debug(f"[SehuatangCaptcha] Waiting {delay:.1f}s before captcha retry")
             time.sleep(delay)
-        with site_captcha_lock():
-            html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies, headers=_captcha_headers(fs_sid))
+        html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies, headers=_captcha_headers(fs_sid))
         cap = extract_json(html)
         code = cap.get("code")
         if code == 429:
