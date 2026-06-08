@@ -37,17 +37,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.0.11",
+        "version": "1.0.12",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.0.12": "修复验证码提交被流控延迟：用户提交答案后的 check 改用只互斥不等待的锁，避免 fetch 后的全局间隔拖慢 check 导致 Cloudflare challenge；check 完成后再为后续轮次/账号设置流控。",
             "v1.0.11": "修复验证码 check 回归：direct check 返回 Cloudflare challenge 时不再 fallback 到 FlareSolverr request.post，避免被放大成 safe_gate 并直接判定 Cookie 失效；改由上层按可重试风控处理。",
             "v1.0.10": "修复验证码会话默认写入 /tmp 导致 MoviePilot/nginx 将 JSON 当缓存文件扫描并报 cache file is too small；默认 session store 改到 /var/tmp/sehuatangsignin，且不再默认启用 legacy /tmp 镜像，仅在显式配置环境变量时兼容。",
             "v1.0.9": "优化 98 验证码流控与配置稳定性：发验证码链接前先完成全局流控等待，点击开始后尽快获取；修复开始获取按钮 POST 自动刷新导致重复确认且看不到验证码的问题；移除 FlareSolverr 开关歧义；健康接口脱敏；普通失败冷却改为时间戳节流；增强数值配置容错，并新增单轮最多取验证码次数配置。",
             "v1.0.8": "优化验证码现场获取、CF 拦截恢复与 429 风险控制：验证码页需手动点击开始获取；check 遇到 Cloudflare Challenge 时重建 FlareSolverr 会话重试；验证码接口改为单请求全局节流，间隔可在配置页调整；FlareSolverr 地址改为填写完整 /v1 API 地址，与司机社插件保持一致。",
-            "v1.0.7": "修正资料刷新失败状态残留：账号后续成功刷新个人资料时，自动清除旧的资料错误提示，详情页资料已刷新统计与账号卡片状态同步更新。",
-            "v1.0.6": "优化 click 类型验证码提示小图显示：为透明文字提示图增加白色底图和留白，提升深色页面上的可读性。"
+            "v1.0.7": "修正资料刷新失败状态残留：账号后续成功刷新个人资料时，自动清除旧的资料错误提示，详情页资料已刷新统计与账号卡片状态同步更新。"
         }
     },
     "WeWorkIPCB": {

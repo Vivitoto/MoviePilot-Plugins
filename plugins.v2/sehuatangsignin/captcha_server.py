@@ -109,13 +109,20 @@ def _session_store_lock():
 
 @contextlib.contextmanager
 def site_captcha_lock():
-    """Cross-process short lock + minimum interval for sehuatang captcha fetch/check endpoint."""
+    """Cross-process short lock + minimum interval for captcha fetch endpoints."""
     with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
         _wait_site_throttle_unlocked()
         try:
             yield
         finally:
             _save_site_throttle_unlocked()
+
+
+@contextlib.contextmanager
+def site_captcha_submit_lock():
+    """Cross-process mutex for captcha check submits; never wait throttle before user answer check."""
+    with _file_lock(_SITE_CAPTCHA_LOCK_PATH):
+        yield
 
 
 def wait_for_site_captcha_ready() -> float:
