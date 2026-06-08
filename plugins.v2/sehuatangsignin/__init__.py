@@ -56,7 +56,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.12"
+    plugin_version = "1.0.13"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -931,18 +931,12 @@ class SehuatangSignin(_PluginBase):
 
                 check_data = check_result.get("data") if isinstance(check_result, dict) else None
                 if check_data == "cf_challenge":
-                    msg = "验证码 check 触发 Cloudflare JS Challenge，重建 FlareSolverr 会话后重试"
+                    msg = "验证码 check 触发 Cloudflare JS Challenge，保留 FlareSolverr 会话并刷新验证码重试"
                     steps.append(msg)
                     logger.warning(f"[SehuatangSignin] [{account_id}] {msg}: {check_result}")
                     destroy_session(captcha_session_id, destroy_fs=False)
                     captcha_session_active = False
-                    fs_destroy_session(fs_sid)
-                    fs_sid = ""
                     if round_no < max_rounds:
-                        fs_sid = fs_create_session()
-                        if not fs_sid:
-                            result["message"] = "Cloudflare Challenge 后重建 FlareSolverr 会话失败"
-                            return result
                         continue
                     result["message"] = "验证码失败：提交 check 被 Cloudflare Challenge 拦截"
                     return result

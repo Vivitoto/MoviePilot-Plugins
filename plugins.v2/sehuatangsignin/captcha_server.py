@@ -1083,26 +1083,13 @@ def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
 
 
 def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
-    # Check endpoint is sensitive to browser/XHR context. Direct requests with
-    # FS-updated cookies has proven closer than FlareSolverr request.post, which
-    # can trigger safe_gate and invalidate the current captcha state.
+    # Check endpoint is sensitive to browser/XHR context. FlareSolverr request.post
+    # has repeatedly produced safe_gate even when the user solved a fresh captcha,
+    # so captcha check must not fall back to FS POST. Let upper layers retry a fresh
+    # captcha on direct_error/cf_challenge instead of converting it into safe_gate.
     direct_result = _direct_check_post(fs_sid, url, body, cookies)
-    if direct_result.get("data") != "direct_error":
-        logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
-        return direct_result
-
-    r = fs_call(fs_sid, {
-        "cmd": "request.post",
-        "url": url,
-        "postData": body,
-        "headers": _check_headers(fs_sid),
-        "maxTimeout": 30000,
-    }, cookies)
-    html = r.get("html", "")
-    result = _parse_check_html(html)
-    result.setdefault("via", "flaresolverr")
-    logger.info(f"[SehuatangCaptcha] Direct check failed; FlareSolverr check result: {result.get('data')}")
-    return result
+    logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
+    return direct_result
 
 
 def extract_json(html: str) -> dict:
