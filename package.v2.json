@@ -37,17 +37,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.0.9",
+        "version": "1.0.10",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.0.10": "修复验证码会话默认写入 /tmp 导致 MoviePilot/nginx 将 JSON 当缓存文件扫描并报 cache file is too small；默认 session store 改到 /var/tmp/sehuatangsignin，且不再默认启用 legacy /tmp 镜像，仅在显式配置环境变量时兼容。",
             "v1.0.9": "优化 98 验证码流控与配置稳定性：发验证码链接前先完成全局流控等待，点击开始后尽快获取；修复开始获取按钮 POST 自动刷新导致重复确认且看不到验证码的问题；移除 FlareSolverr 开关歧义；健康接口脱敏；普通失败冷却改为时间戳节流；增强数值配置容错，并新增单轮最多取验证码次数配置。",
             "v1.0.8": "优化验证码现场获取、CF 拦截恢复与 429 风险控制：验证码页需手动点击开始获取；check 遇到 Cloudflare Challenge 时重建 FlareSolverr 会话重试；验证码接口改为单请求全局节流，间隔可在配置页调整；FlareSolverr 地址改为填写完整 /v1 API 地址，与司机社插件保持一致。",
             "v1.0.7": "修正资料刷新失败状态残留：账号后续成功刷新个人资料时，自动清除旧的资料错误提示，详情页资料已刷新统计与账号卡片状态同步更新。",
             "v1.0.6": "优化 click 类型验证码提示小图显示：为透明文字提示图增加白色底图和留白，提升深色页面上的可读性。",
-            "v1.0.5": "修正 98 验证码实际有效期过短导致的 check 验证超时：改为打开验证页面后现场获取验证码，页面倒计时约 30 秒并拦截过期提交；签到进行中跳过重复提醒/重复触发，并统一清理验证码/FlareSolverr 会话。",
-            "v1.0.4": "仅增加配置项自身的上下留白：保留原有卡片、分组、列宽、dense 和 hide-details 结构，只给配置项 VCol 添加 py-3，使上下间距接近 MoxSignIn / SijisheSignIn 默认 VCol 间距。"
+            "v1.0.5": "修正 98 验证码实际有效期过短导致的 check 验证超时：改为打开验证页面后现场获取验证码，页面倒计时约 30 秒并拦截过期提交；签到进行中跳过重复提醒/重复触发，并统一清理验证码/FlareSolverr 会话。"
         }
     },
     "WeWorkIPCB": {

@@ -48,15 +48,12 @@ FS_URL_TEMPLATE = "{flaresolverr_url}"
 # memory spaces. The store contains captcha images/session ids, not account cookies.
 _captcha_sessions: dict = {}
 _sessions_lock = threading.Lock()
-_DEFAULT_SESSION_STORE_PATH = os.path.join(tempfile.gettempdir(), "sehuatangsignin_captcha_sessions.json")
+_DEFAULT_SESSION_STORE_PATH = os.path.join("/var/tmp", "sehuatangsignin", "captcha_sessions.json")
 _SESSION_STORE_PATH = os.environ.get("SEHUATANG_CAPTCHA_SESSION_STORE", _DEFAULT_SESSION_STORE_PATH)
-# Compatibility bridge: older/stale relay instances may still read the default
-# temp-file store. Mirror session state there so producer and relay do not split-brain
-# during plugin hot reloads or reverse-proxy target drift.
-_LEGACY_SESSION_STORE_PATH = os.environ.get(
-    "SEHUATANG_CAPTCHA_LEGACY_SESSION_STORE",
-    _DEFAULT_SESSION_STORE_PATH,
-)
+# Optional compatibility bridge for explicitly configured legacy relay stores.
+# Do not default to /tmp: MoviePilot/nginx may use /tmp for cache files and will
+# complain about arbitrary JSON files there ("cache file ... is too small").
+_LEGACY_SESSION_STORE_PATH = os.environ.get("SEHUATANG_CAPTCHA_LEGACY_SESSION_STORE", "").strip()
 _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
 _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
 _SITE_CAPTCHA_THROTTLE_PATH = f"{_SESSION_STORE_PATH}.site.next"
