@@ -1080,11 +1080,9 @@ def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
     # FS-updated cookies has proven closer than FlareSolverr request.post, which
     # can trigger safe_gate and invalidate the current captcha state.
     direct_result = _direct_check_post(fs_sid, url, body, cookies)
-    if direct_result.get("data") not in ("direct_error", "cf_challenge"):
+    if direct_result.get("data") != "direct_error":
         logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
         return direct_result
-    if direct_result.get("data") == "cf_challenge":
-        logger.warning("[SehuatangCaptcha] Direct check hit Cloudflare challenge; falling back to FlareSolverr request.post")
 
     r = fs_call(fs_sid, {
         "cmd": "request.post",
