@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -681,6 +681,61 @@ class SijisheSignIn(_PluginBase):
         except (ValueError, TypeError):
             return None
 
+    def _reward_to_map(self, reward: Optional[str]) -> Dict[str, int]:
+        """Parse reward text into {field: delta}, e.g. 积分 +1，车票 +1."""
+        result: Dict[str, int] = {}
+        if not reward:
+            return result
+        text = html.unescape(str(reward))
+        for field in ["积分", "威望", "车票", "贡献"]:
+            aliases = [field]
+            if field == "车票":
+                aliases.append("車票")
+            for alias in aliases:
+                m = re.search(rf'{re.escape(alias)}\s*(?:[+＋:]|：)?\s*(\d+)', text)
+                if m:
+                    result[field] = int(m.group(1))
+                    break
+        return result
+
+    def _format_reward_map(self, reward_map: Dict[str, int]) -> Optional[str]:
+        """Format reward map in stable user-facing order."""
+        parts = []
+        for field in ["积分", "威望", "车票", "贡献"]:
+            value = reward_map.get(field)
+            if value and value > 0:
+                parts.append(f"{field} +{value}")
+        return "，".join(parts) if parts else None
+
+    def _asset_delta_reward_map(self, pre_info: Optional[Dict[str, Any]], post_info: Optional[Dict[str, Any]]) -> Dict[str, int]:
+        """Calculate positive asset deltas from before/after snapshots."""
+        if not pre_info or not post_info:
+            return {}
+        result: Dict[str, int] = {}
+        for field, label in [("credits", "积分"), ("prestige", "威望"), ("tickets", "车票"), ("contribution", "贡献")]:
+            pre = self._parse_num(pre_info.get(field))
+            post = self._parse_num(post_info.get(field))
+            if pre is not None and post is not None and post > pre:
+                result[label] = post - pre
+        return result
+
+    def _merge_reward_with_asset_delta(self, reward: Optional[str], pre_info: Optional[Dict[str, Any]], post_info: Optional[Dict[str, Any]]) -> Tuple[Optional[str], bool]:
+        """Use asset delta to fill missing reward fields, without losing parsed response reward."""
+        delta_map = self._asset_delta_reward_map(pre_info, post_info)
+        if not delta_map:
+            return reward, False
+        reward_map = self._reward_to_map(reward)
+        if reward_map:
+            changed = False
+            for field, value in delta_map.items():
+                if field not in reward_map:
+                    reward_map[field] = value
+                    changed = True
+            merged = self._format_reward_map(reward_map)
+            return merged or reward, changed
+        delta_reward = self._format_reward_map(delta_map)
+        return delta_reward or reward, bool(delta_reward)
+
     def _extract_reward(self, text: str) -> Optional[str]:
         """从签到响应文本中提取奖励信息"""
         if not text:
@@ -1051,19 +1106,13 @@ class SijisheSignIn(_PluginBase):
                 info = self._refresh_user_info_fs(fs_session, uid=self._uid or None) if self._use_flaresolverr else self._refresh_user_info_requests(session, uid=self._uid or None)
                 if info:
                     steps.append(f"👤 已刷新用户信息：积分 {info.get('credits') or '-'} / 威望 {info.get('prestige') or '-'} / 贡献 {info.get('contribution') or '-'}")
-                    # 资产对比：如果文本提取没拿到奖励，用前后差额兜底
-                    if pre_info and not reward:
-                        deltas = []
-                        for field, label in [("credits", "积分"), ("prestige", "威望"), ("tickets", "车票"), ("contribution", "贡献")]:
-                            pre = self._parse_num(pre_info.get(field))
-                            post = self._parse_num(info.get(field))
-                            if pre is not None and post is not None and post > pre:
-                                deltas.append(f"{label} +{post - pre}")
-                        if deltas:
-                            reward = "，".join(deltas)
-                            result['reward'] = reward
-                            steps.append(f"🎁 签到奖励（资产对比）：{reward}")
-                            self._log_step(f"签到奖励（资产对比）：{reward}")
+                    # 资产对比：不仅在 reward 为空时兜底，也用于补全响应里缺失的奖励字段。
+                    merged_reward, reward_changed = self._merge_reward_with_asset_delta(reward, pre_info, info)
+                    if reward_changed and merged_reward:
+                        reward = merged_reward
+                        result['reward'] = reward
+                        steps.append(f"🎁 签到奖励（资产对比补全）：{reward}")
+                        self._log_step(f"签到奖励（资产对比补全）：{reward}")
             except Exception as info_error:
                 steps.append(f"⚠️ 用户信息刷新失败：{str(info_error)}")
 
