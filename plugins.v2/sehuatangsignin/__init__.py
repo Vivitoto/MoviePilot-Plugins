@@ -52,7 +52,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.15"
+    plugin_version = "1.0.16"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -158,7 +158,8 @@ class SehuatangSignin(_PluginBase):
                 self._captcha_port = max(1, int(config.get("captcha_port") or 5099))
                 self._captcha_timeout = max(60, int(config.get("captcha_timeout") or 300))
                 self._captcha_fetch_timeout = max(30, int(config.get("captcha_fetch_timeout") or 300))
-                self._captcha_check_retries = max(0, int(config.get("captcha_check_retries") or 2))
+                captcha_check_retries = config.get("captcha_check_retries", 2)
+                self._captcha_check_retries = max(0, int(2 if captcha_check_retries in (None, "") else captcha_check_retries))
                 self._public_base_url = str(config.get("public_base_url") or "").strip().rstrip("/")
                 self._parse_accounts()
 

@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.12"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -92,8 +92,10 @@ class MoxSignIn(_PluginBase):
                 self._remember = config.get("remember", True)
                 self._user_id = str(config.get("user_id") or "").strip()
                 self._refresh_user_info = config.get("refresh_user_info", True)
-                self._retry_count = max(0, int(config.get("retry_count") or 3))
-                self._retry_interval_minutes = max(1, int(config.get("retry_interval_minutes") or 5))
+                retry_count = config.get("retry_count", 3)
+                retry_interval = config.get("retry_interval_minutes", 5)
+                self._retry_count = max(0, int(3 if retry_count in (None, "") else retry_count))
+                self._retry_interval_minutes = max(1, int(5 if retry_interval in (None, "") else retry_interval))
 
             if self._onlyonce:
                 logger.info("Mox签到自用：保存配置后执行一次")
@@ -227,7 +229,7 @@ class MoxSignIn(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_count', 'label': '失败重试次数', 'type': 'number', 'placeholder': '3'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_interval_minutes', 'label': '重试间隔（分钟）', 'type': 'number', 'placeholder': '5'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [
-                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内。随机延时 1-30 分钟始终生效。'}
+                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内；自动定时首轮会随机延时 1-30 分钟，失败重试按配置间隔准时触发。'}
                                         ]},
                                     ]
                                 }
@@ -550,7 +552,7 @@ class MoxSignIn(_PluginBase):
 
     def _source_text(self, source: Any) -> str:
         source_value = str(source or '').strip().lower()
-        if source_value in {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic'}:
+        if source_value in {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic', 'retry'}:
             return '自动触发'
         if source_value in {'command', 'api', 'manual', 'onlyonce'}:
             return '手动触发'
@@ -560,6 +562,19 @@ class MoxSignIn(_PluginBase):
         history = self.get_data(self._history_key) or []
         if not isinstance(history, list):
             history = []
+        result_day = str(result.get('executed_at') or '')[:10]
+        result_source = str(result.get('source') or '').strip().lower()
+        result_label = str(result.get('result_label') or '')
+        auto_sources = {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic', 'retry'}
+        if result_day and result_source == 'retry' and result_label in {'成功', '已签到'}:
+            history = [
+                item for item in history
+                if not (
+                    str(item.get('executed_at') or '').startswith(result_day)
+                    and str(item.get('source') or '').strip().lower() in auto_sources
+                    and str(item.get('result_label') or '') == '失败'
+                )
+            ]
         history.append(result)
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True)[:30]
         self.save_data(self._history_key, history)
@@ -930,6 +945,7 @@ class MoxSignIn(_PluginBase):
                 self._save_result(result)
                 if self._notify:
                     self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+                self._handle_retry_after_result(result, "今日已签到")
                 return result
             payload = self._captcha(session)
             result['captcha_result'] = f"识别成功：{payload.get('captcha', '')}"
@@ -1003,6 +1019,10 @@ class MoxSignIn(_PluginBase):
         if result.get("result_label") != "失败" or self._retry_count <= 0:
             return
 
+        source_value = str(result.get("source") or "").strip().lower()
+        if source_value not in {"cron", "scheduler", "schedule", "service", "auto", "automatic", "retry"}:
+            return
+
         if not self._scheduler:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
 
@@ -1018,6 +1038,11 @@ class MoxSignIn(_PluginBase):
         retry_state["attempt"] = retry_state.get("attempt", 0) + 1
         if retry_state["attempt"] <= self._retry_count:
             next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+            if next_retry_time.strftime("%Y-%m-%d") != today:
+                self._log_step("失败重试时间已跨天，按当日限制不再安排重试")
+                retry_state["attempt"] = self._retry_count
+                self.save_data(self._retry_state_key, retry_state)
+                return
             self._scheduler.add_job(
                 func=self._retry_wrapper,
                 trigger="date",
@@ -1042,7 +1067,7 @@ class MoxSignIn(_PluginBase):
     def _retry_wrapper(self, attempt: int):
         """由 APScheduler 调用的重试入口，避免直接传递 self.run_once（不可序列化）"""
         self._log_step(f"【重试 #{attempt}】触发执行")
-        self.run_once(source="cron")
+        self.run_once(source="retry")
 
     def stop_service(self):
         if self._scheduler:

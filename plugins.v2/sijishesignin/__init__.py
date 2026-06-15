@@ -25,7 +25,7 @@ class SijisheSignIn(_PluginBase):
     plugin_name = "司机签到自用"
     plugin_desc = "自动登录并完成论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/sijishe-v2.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sijishe_"
@@ -71,8 +71,10 @@ class SijisheSignIn(_PluginBase):
                 self._uid = str(config.get("uid") or "").strip()
                 self._use_flaresolverr = config.get("use_flaresolverr", False)
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191/v1").strip()
-                self._retry_count = max(0, int(config.get("retry_count") or 3))
-                self._retry_interval_minutes = max(1, int(config.get("retry_interval_minutes") or 5))
+                retry_count = config.get("retry_count", 3)
+                retry_interval = config.get("retry_interval_minutes", 5)
+                self._retry_count = max(0, int(3 if retry_count in (None, "") else retry_count))
+                self._retry_interval_minutes = max(1, int(5 if retry_interval in (None, "") else retry_interval))
 
             if self._onlyonce:
                 logger.info("司机社签到自用：保存配置后执行一次")
@@ -206,7 +208,7 @@ class SijisheSignIn(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_count', 'label': '失败重试次数', 'type': 'number', 'placeholder': '3'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3}, 'content': [{'component': 'VTextField', 'props': {'model': 'retry_interval_minutes', 'label': '重试间隔（分钟）', 'type': 'number', 'placeholder': '5'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12}, 'content': [
-                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内。随机延时 1-30 分钟始终生效。'}
+                                            {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mt-1'}, 'text': '💡 定时任务触发失败后自动重试，限当天内；自动定时首轮会随机延时 1-30 分钟，失败重试按配置间隔准时触发。'}
                                         ]},
                                     ]
                                 }
@@ -426,7 +428,7 @@ class SijisheSignIn(_PluginBase):
 
     def _source_text(self, source: Any) -> str:
         source_value = str(source or '').strip().lower()
-        if source_value in {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic'}:
+        if source_value in {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic', 'retry'}:
             return '自动触发'
         if source_value in {'command', 'api', 'manual', 'onlyonce'}:
             return '手动触发'
@@ -439,6 +441,19 @@ class SijisheSignIn(_PluginBase):
         history = self.get_data(self._history_key) or []
         if not isinstance(history, list):
             history = []
+        result_day = str(result.get('executed_at') or '')[:10]
+        result_source = str(result.get('source') or '').strip().lower()
+        result_label = str(result.get('result_label') or '')
+        auto_sources = {'cron', 'scheduler', 'schedule', 'service', 'auto', 'automatic', 'retry'}
+        if result_day and result_source == 'retry' and result_label in {'成功', '已签到'}:
+            history = [
+                item for item in history
+                if not (
+                    str(item.get('executed_at') or '').startswith(result_day)
+                    and str(item.get('source') or '').strip().lower() in auto_sources
+                    and str(item.get('result_label') or '') == '失败'
+                )
+            ]
         history.append(result)
         history = sorted(history, key=lambda x: x.get('executed_at', ''), reverse=True)[:30]
         self.save_data(self._history_key, history)
@@ -1076,6 +1091,9 @@ class SijisheSignIn(_PluginBase):
                 self._save_result(result)
                 if self._notify:
                     self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+                if fs_session:
+                    self._fs_destroy_session(fs_session)
+                self._handle_retry_after_result(result, "登录失败")
                 return result
 
             # 1.5 签到前资产快照（用于后续对比算奖励）
@@ -1147,44 +1165,66 @@ class SijisheSignIn(_PluginBase):
         if self._notify:
             self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
 
-        # ── 失败重试调度 ──────────────────────────────────────────────
-        if result.get("result_label") == "失败" and self._retry_count > 0:
-            existing_jobs = [j.id for j in self._scheduler.get_jobs()]
-            if f"{self.plugin_config_prefix}retry" not in existing_jobs:
-                retry_state = self.get_data(self._retry_state_key) or {}
-                today = datetime.now().strftime("%Y-%m-%d")
-                if retry_state.get("date") != today:
-                    retry_state = {"date": today, "attempt": 0}
-                retry_state["attempt"] = retry_state.get("attempt", 0) + 1
-                if retry_state["attempt"] <= self._retry_count:
-                    next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
-                    self._scheduler.add_job(
-                        func=self._retry_wrapper,
-                        trigger="date",
-                        run_date=next_retry_time,
-                        id=f"{self.plugin_config_prefix}retry",
-                        name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
-                        kwargs={"attempt": retry_state["attempt"]},
-                        replace=True,
-                    )
-                    self._log_step(
-                        f"签到失败，第 {retry_state['attempt']} 次重试已安排在 "
-                        f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
-                    )
-                    retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
-                    retry_state["attempt"] = self._retry_count
-                self.save_data(self._retry_state_key, retry_state)
-        elif result.get("result_label") == "成功":
+        self._handle_retry_after_result(result, "签到失败")
+        return result
+
+    def _handle_retry_after_result(self, result: Dict[str, Any], reason: str):
+        """根据执行结果安排失败重试；兼容 MoviePilot 主调度器触发时内部调度器为空的情况。"""
+        if result.get("result_label") == "成功":
             if self.get_data(self._retry_state_key):
                 self.save_data(self._retry_state_key, None)
-        return result
+            return
+        if result.get("result_label") != "失败" or self._retry_count <= 0:
+            return
+
+        source_value = str(result.get("source") or "").strip().lower()
+        if source_value not in {"cron", "scheduler", "schedule", "service", "auto", "automatic", "retry"}:
+            return
+
+        if not self._scheduler:
+            self._scheduler = BackgroundScheduler(timezone=settings.TZ)
+
+        existing_jobs = [j.id for j in self._scheduler.get_jobs()]
+        if f"{self.plugin_config_prefix}retry" in existing_jobs:
+            return
+
+        retry_state = self.get_data(self._retry_state_key) or {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        if retry_state.get("date") != today:
+            retry_state = {"date": today, "attempt": 0}
+        retry_state["attempt"] = retry_state.get("attempt", 0) + 1
+        if retry_state["attempt"] <= self._retry_count:
+            next_retry_time = datetime.now() + timedelta(minutes=self._retry_interval_minutes)
+            if next_retry_time.strftime("%Y-%m-%d") != today:
+                self._log_step("失败重试时间已跨天，按当日限制不再安排重试")
+                retry_state["attempt"] = self._retry_count
+                self.save_data(self._retry_state_key, retry_state)
+                return
+            self._scheduler.add_job(
+                func=self._retry_wrapper,
+                trigger="date",
+                run_date=next_retry_time,
+                id=f"{self.plugin_config_prefix}retry",
+                name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
+                kwargs={"attempt": retry_state["attempt"]},
+                replace=True,
+            )
+            if not self._scheduler.running:
+                self._scheduler.start()
+            self._log_step(
+                f"{reason}，第 {retry_state['attempt']} 次重试已安排在 "
+                f"{next_retry_time.strftime('%H:%M:%S')}（间隔 {self._retry_interval_minutes} 分钟）"
+            )
+            retry_state["scheduled_at"] = next_retry_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            self._log_step(f"当日重试次数（{self._retry_count} 次）已耗尽，不再重试")
+            retry_state["attempt"] = self._retry_count
+        self.save_data(self._retry_state_key, retry_state)
 
     def _retry_wrapper(self, attempt: int):
         """由 APScheduler 调用的重试入口，避免直接传递 self.run_once（不可序列化）"""
         self._log_step(f"【重试 #{attempt}】触发执行")
-        self.run_once(source="cron")
+        self.run_once(source="retry")
 
     def stop_service(self):
         if self._scheduler:
