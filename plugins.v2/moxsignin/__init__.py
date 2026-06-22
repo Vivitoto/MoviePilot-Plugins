@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.0.12"
+    plugin_version = "1.0.13"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -1050,7 +1050,7 @@ class MoxSignIn(_PluginBase):
                 id=f"{self.plugin_config_prefix}retry",
                 name=f"{self.plugin_name}（第 {retry_state['attempt']} 次重试）",
                 kwargs={"attempt": retry_state["attempt"]},
-                replace=True,
+                replace_existing=True,
             )
             if not self._scheduler.running:
                 self._scheduler.start()
