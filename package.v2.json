@@ -54,11 +54,12 @@
         "name": "企微配置IP Cloak自用版",
         "description": "自用版：适配 MoviePilot 新浏览器内核 Cloak，定时获取最新动态公网IP，配置到企业微信应用可信IP列表。",
         "labels": "企业微信,动态IP,自动化,Cloak浏览器,自用",
-        "version": "2.5.2",
+        "version": "2.5.3",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb.png",
         "author": "Vivitoto",
         "level": 2,
         "history": {
+            "v2.5.3": "修复 CloakBrowser/Chromium 偶发 SIGSEGV 被误判为 cookie 失效的问题：浏览器进程异常时保留当前 cookie 状态并等待下轮重试；CookieCloud/手动配置暂时取不到新 cookie 时，回退使用上次缓存 cookie 继续校验。",
             "v2.5.2": "修复 Playwright Sync API 与 MoviePilot asyncio 事件循环冲突导致 cookie 校验持续失败的问题：将全部浏览器操作（ChangeIP / refresh_cookie / login）放入独立线程池执行，避免 \"It looks like you are using Playwright Sync API inside the asyncio loop\" 报错。",
             "v2.5.1": "登录二维码 loading gif 改用 Gitee 镜像（vivitoto97/MoviePilot-Plugins）以缓解国内 raw.githubusercontent.com 访问慢/不通的问题，避免占位图加载不出来。",
             "v2.5.0": "基于 suraxiuxiu WeWorkIPPW 2.4.2 与 issue #37 评论脚本制作自用版：插件 ID 改为 weworkipcb（去掉与 Playwright 同名的 pw 后缀），适配 MoviePilot 新浏览器内核 cloakbrowser，图标改为本仓库托管，并增加 cloakbrowser 缺失时的明确报错。"

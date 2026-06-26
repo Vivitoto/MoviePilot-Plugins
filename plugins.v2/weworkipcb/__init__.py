@@ -38,7 +38,7 @@ class WeWorkIPCB(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/weworkipcb.png"
     # 插件版本
-    plugin_version = "2.5.2"
+    plugin_version = "2.5.3"
     # 插件作者
     plugin_author = "Vivitoto"
     # 作者主页
@@ -278,6 +278,27 @@ class WeWorkIPCB(_PluginBase):
             raise RuntimeError(f"cloakbrowser 不可用，无法启动 MoviePilot 新浏览器内核：{_cloak_import_error}")
         return cloak_launch(headless=True)
 
+    @staticmethod
+    def _is_browser_process_error(error: Exception) -> bool:
+        """判断是否为浏览器进程/内核崩溃类异常。
+
+        这类异常只说明本次 CloakBrowser 启动或进程通信失败，不能证明企业微信
+        cookie 已失效；如果把它当成 cookie 失效保存，会导致一次 SIGSEGV 后后续
+        定时任务全部进入 cookie 为空/失效状态。
+        """
+        message = str(error)
+        return any(
+            marker in message
+            for marker in (
+                "BrowserType.launch",
+                "Target page, context or browser has been closed",
+                "browser has been closed",
+                "process did exit",
+                "signal=SIGSEGV",
+                "SIGSEGV",
+            )
+        )
+
     def ChangeIP(self):
         logger.info("开始请求企业微信管理更改可信IP")
         if not self.check_connect():
@@ -378,6 +399,8 @@ class WeWorkIPCB(_PluginBase):
                 logger.error(f"cookie校验失败:{e}")
                 if "Timeout" in str(e):
                     logger.info("检测可能连接超时,跳过本次刷新")
+                elif self._is_browser_process_error(e):
+                    logger.warning("检测到浏览器进程异常，保留当前 cookie 状态并等待下轮重试")
                 else:
                     self._cookie_valid = False
             finally:
@@ -426,6 +449,9 @@ class WeWorkIPCB(_PluginBase):
             else:
                 cookie_header = self._cookie_header
             if cookie_header == '' or cookie_header is None:
+                if self._cookie_from_CC:
+                    logger.warning("未获取到新 cookie，尝试使用上次缓存 cookie")
+                    return self._cookie_from_CC
                 logger.error("未获取到任何cookie")
                 return ''
             cookie = self.parse_cookie_header(cookie_header)
