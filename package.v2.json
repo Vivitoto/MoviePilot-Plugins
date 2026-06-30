@@ -33,6 +33,19 @@
             "v1.0.3": "新增失败自动重试机制：可配置重试次数（默认3次）和重试间隔（默认5分钟），定时任务触发失败后在当按设定间隔自动重试直至成功；优化配置页 UI，采用卡片式三段布局（基本配置/账号与站点/定时与重试），风格与 Mox 签到统一。"
         }
     },
+    "JuyingSignIn": {
+        "name": "聚影签到自用",
+        "description": "自动登录聚影并完成每日签到。",
+        "labels": "签到,自动化,消息通知",
+        "version": "1.0.1",
+        "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/juyingsignin.png",
+        "author": "Vivitoto",
+        "level": 1,
+        "history": {
+            "v1.0.1": "增强详情页：新增按日期聚合的每日签到记录，失败后重试成功会优先展示当天成功结果，同时保留完整执行流水。",
+            "v1.0.0": "初始版本：支持聚影登录与每日签到、定时执行、手动触发、失败重试、通知推送和执行历史展示。"
+        }
+    },
     "SehuatangSignin": {
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
