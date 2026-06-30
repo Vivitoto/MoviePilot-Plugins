@@ -37,11 +37,12 @@
         "name": "聚影签到自用",
         "description": "自动登录聚影并完成每日签到。",
         "labels": "签到,自动化,消息通知",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/juyingsignin.png",
         "author": "Vivitoto",
         "level": 1,
         "history": {
+            "v1.0.2": "新增“使用代理”配置开关：代理地址可保留但仅在开关开启时生效，避免误走代理；兼容旧配置中已填写代理地址的用户。",
             "v1.0.1": "增强详情页：新增按日期聚合的每日签到记录，失败后重试成功会优先展示当天成功结果，同时保留完整执行流水。",
             "v1.0.0": "初始版本：支持聚影登录与每日签到、定时执行、手动触发、失败重试、通知推送和执行历史展示。"
         }
@@ -50,11 +51,13 @@
         "name": "Nodeseek签到自用",
         "description": "通过 Cookie 自动完成 NodeSeek 每日签到。",
         "labels": "签到,自动化,消息通知,NodeSeek",
-        "version": "1.0.0",
+        "version": "1.0.2",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png",
         "author": "Vivitoto",
         "level": 1,
         "history": {
+            "v1.0.2": "新增“使用代理”配置开关：代理地址可保留但仅在开关开启时用于 FlareSolverr、curl_cffi、cloudscraper 和 requests；保留 v1.0.1 的成员ID链接自动提取修复。",
+            "v1.0.1": "修复成员ID配置兼容性：支持填写纯数字或完整 NodeSeek 空间链接，自动提取 /space/ 后的数字用于用户信息接口；优化请求兜底日志文案。",
             "v1.0.0": "新增 NodeSeek 签到自用插件：支持 Cookie 签到、随机/固定鸡腿、成员ID用户信息、FlareSolverr 预热、代理、通知、每日记录、执行流水和失败重试。"
         }
     },

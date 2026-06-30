@@ -36,7 +36,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -51,6 +51,7 @@ class NodeSeekSignIn(_PluginBase):
     _member_id = ""
     _base_url = "https://www.nodeseek.com"
     _random_signin = True
+    _use_proxy = False
     _proxy_url = ""
     _timeout = 30
     _use_flaresolverr = False
@@ -74,10 +75,11 @@ class NodeSeekSignIn(_PluginBase):
                 self._onlyonce = config.get("onlyonce", False)
                 self._cron = config.get("cron") or "20 8 * * *"
                 self._cookie = str(config.get("cookie") or "").strip()
-                self._member_id = str(config.get("member_id") or "").strip()
+                self._member_id = self._normalize_member_id(config.get("member_id"))
                 self._base_url = str(config.get("base_url") or "https://www.nodeseek.com").strip().rstrip("/")
                 self._random_signin = config.get("random_signin", True)
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
+                self._use_proxy = config.get("use_proxy", bool(self._proxy_url))
                 self._timeout = max(1, int(config.get("timeout") or 30))
                 self._use_flaresolverr = config.get("use_flaresolverr", False)
                 self._flaresolverr_url = str(config.get("flaresolverr_url") or "http://127.0.0.1:8191/v1").strip().rstrip("/")
@@ -116,6 +118,7 @@ class NodeSeekSignIn(_PluginBase):
             "member_id": self._member_id,
             "base_url": self._base_url,
             "random_signin": self._random_signin,
+            "use_proxy": self._use_proxy,
             "proxy_url": self._proxy_url,
             "timeout": self._timeout,
             "use_flaresolverr": self._use_flaresolverr,
@@ -187,7 +190,7 @@ class NodeSeekSignIn(_PluginBase):
                                 {"component": "div", "props": {"class": "text-subtitle-2 font-weight-bold mb-3"}, "text": "🍪 Cookie 与账号"},
                                 {"component": "VRow", "content": [
                                     {"component": "VCol", "props": {"cols": 12}, "content": [{"component": "VTextarea", "props": {"model": "cookie", "label": "NodeSeek Cookie", "rows": 3, "placeholder": "登录 NodeSeek 后从浏览器 Network 请求头复制 Cookie", "auto-grow": True}}]},
-                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "member_id", "label": "成员ID（可选，用于获取用户信息）", "placeholder": "如 https://www.nodeseek.com/space/26589 中的 26589"}}]},
+                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "member_id", "label": "成员ID（可选，用于获取用户信息）", "placeholder": "可填纯数字 26589，或完整空间链接 https://www.nodeseek.com/space/26589"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "base_url", "label": "站点地址", "placeholder": "https://www.nodeseek.com"}}]},
                                 ]},
                             ],
@@ -201,6 +204,7 @@ class NodeSeekSignIn(_PluginBase):
                             "content": [
                                 {"component": "div", "props": {"class": "text-subtitle-2 font-weight-bold mb-3"}, "text": "🌐 网络与反代"},
                                 {"component": "VRow", "content": [
+                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VSwitch", "props": {"model": "use_proxy", "label": "使用代理"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "proxy_url", "label": "代理地址", "placeholder": "http://127.0.0.1:7890"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "timeout", "label": "请求超时（秒）", "type": "number", "placeholder": "30"}}]},
                                     {"component": "VCol", "props": {"cols": 12}, "content": [{"component": "VTextField", "props": {"model": "flaresolverr_url", "label": "FlareSolverr API 地址", "placeholder": "http://127.0.0.1:8191/v1", "hint": "遇到 Cloudflare 验证时开启；需填写完整 /v1 路径", "persistent-hint": True}}]},
@@ -237,6 +241,7 @@ class NodeSeekSignIn(_PluginBase):
             "member_id": "",
             "base_url": "https://www.nodeseek.com",
             "random_signin": True,
+            "use_proxy": False,
             "proxy_url": "",
             "timeout": 30,
             "use_flaresolverr": False,
@@ -412,6 +417,17 @@ class NodeSeekSignIn(_PluginBase):
     def _now_text(self) -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    @staticmethod
+    def _normalize_member_id(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        space_match = re.search(r"/space/(\d+)", text)
+        if space_match:
+            return space_match.group(1)
+        digit_match = re.search(r"\d+", text)
+        return digit_match.group(0) if digit_match else ""
+
     def _headers(self, referer: str = "") -> Dict[str, str]:
         return {
             "Accept": "*/*",
@@ -430,7 +446,7 @@ class NodeSeekSignIn(_PluginBase):
         }
 
     def _proxies(self) -> Dict[str, str]:
-        if not self._proxy_url:
+        if not self._use_proxy or not self._proxy_url:
             return {}
         return {"http": self._proxy_url, "https": self._proxy_url}
 
@@ -459,7 +475,7 @@ class NodeSeekSignIn(_PluginBase):
             "url": f"{self._base_url}/board",
             "maxTimeout": max(self._timeout * 1000, 90000),
         }
-        if self._proxy_url:
+        if self._use_proxy and self._proxy_url:
             payload["proxy"] = {"url": self._proxy_url}
         resp = requests.post(self._flaresolverr_url, json=payload, timeout=max(self._timeout * 4, 90))
         resp.raise_for_status()
@@ -482,7 +498,7 @@ class NodeSeekSignIn(_PluginBase):
                     raise RuntimeError("请求被 Cloudflare 阻断")
                 return resp.json(), text, getattr(resp, "status_code", 200)
             except Exception as e:
-                self._log_step(f"curl_cffi 请求失败，尝试备用请求：{e}")
+                self._log_step(f"curl_cffi 未拿到可用 JSON，尝试备用请求：{e}")
 
         if HAS_CLOUDSCRAPER:
             try:
@@ -495,7 +511,7 @@ class NodeSeekSignIn(_PluginBase):
                     raise RuntimeError("请求被 Cloudflare 阻断")
                 return resp.json(), text, resp.status_code
             except Exception as e:
-                self._log_step(f"cloudscraper 请求失败，尝试 requests：{e}")
+                self._log_step(f"cloudscraper 未拿到可用 JSON，尝试 requests：{e}")
 
         resp = requests.request(method, url, headers=headers, proxies=proxies, timeout=self._timeout)
         text = resp.text or ""
@@ -644,7 +660,7 @@ class NodeSeekSignIn(_PluginBase):
             "steps": steps,
             "finished": False,
             "use_flaresolverr": self._use_flaresolverr,
-            "proxy_used": self._proxy_url or "未配置",
+            "proxy_used": self._proxy_url if self._use_proxy and self._proxy_url else "未启用",
         }
 
         if not self._cookie:

@@ -21,7 +21,7 @@ class JuyingSignIn(_PluginBase):
     plugin_name = "聚影签到自用"
     plugin_desc = "自动登录聚影并完成每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/juyingsignin.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "juyingsignin_"
@@ -35,6 +35,7 @@ class JuyingSignIn(_PluginBase):
     _username = ""
     _password = ""
     _base_url = "https://share.huamucang.top"
+    _use_proxy = False
     _proxy_url = ""
     _timeout = 20
     _timezone = "Asia/Shanghai"
@@ -60,6 +61,7 @@ class JuyingSignIn(_PluginBase):
                 self._password = str(config.get("password") or "")
                 self._base_url = str(config.get("base_url") or "https://share.huamucang.top").strip().rstrip("/")
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
+                self._use_proxy = config.get("use_proxy", bool(self._proxy_url))
                 self._timeout = max(1, int(config.get("timeout") or 20))
                 retry_count = config.get("retry_count", 3)
                 retry_interval = config.get("retry_interval_minutes", 5)
@@ -95,6 +97,7 @@ class JuyingSignIn(_PluginBase):
             "username": self._username,
             "password": self._password,
             "base_url": self._base_url,
+            "use_proxy": self._use_proxy,
             "proxy_url": self._proxy_url,
             "timeout": self._timeout,
             "timezone": self._timezone,
@@ -163,6 +166,7 @@ class JuyingSignIn(_PluginBase):
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "username", "label": "用户名"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "password", "label": "密码", "type": "password"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "base_url", "label": "站点地址", "placeholder": "https://share.huamucang.top"}}]},
+                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VSwitch", "props": {"model": "use_proxy", "label": "使用代理"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "proxy_url", "label": "代理地址", "placeholder": "http://127.0.0.1:7890"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "timeout", "label": "请求超时（秒）", "type": "number", "placeholder": "20"}}]},
                                 ]},
@@ -197,6 +201,7 @@ class JuyingSignIn(_PluginBase):
             "username": "",
             "password": "",
             "base_url": "https://share.huamucang.top",
+            "use_proxy": False,
             "proxy_url": "",
             "timeout": 20,
             "timezone": "Asia/Shanghai",
@@ -365,7 +370,7 @@ class JuyingSignIn(_PluginBase):
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
         })
-        if self._proxy_url:
+        if self._use_proxy and self._proxy_url:
             session.proxies.update({"http": self._proxy_url, "https": self._proxy_url})
         return session
 
@@ -509,7 +514,7 @@ class JuyingSignIn(_PluginBase):
             "signed_today": False,
             "username": self._username,
             "level_name": "-",
-            "proxy_used": self._proxy_url or "未配置",
+            "proxy_used": self._proxy_url if self._use_proxy and self._proxy_url else "未启用",
             "steps": steps,
             "finished": False,
         }
@@ -526,7 +531,7 @@ class JuyingSignIn(_PluginBase):
             steps.append("🚀 开始执行聚影签到流程")
             self._log_step(f"开始执行聚影签到流程（{trigger_text}）")
             session = self._session()
-            steps.append(f"🌐 已创建会话，代理：{self._proxy_url or '未配置'}")
+            steps.append(f"🌐 已创建会话，代理：{self._proxy_url if self._use_proxy and self._proxy_url else '未启用'}")
 
             token, user_info = self._login(session)
             result["login_status"] = "成功"
