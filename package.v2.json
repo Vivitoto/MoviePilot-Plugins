@@ -46,6 +46,18 @@
             "v1.0.0": "初始版本：支持聚影登录与每日签到、定时执行、手动触发、失败重试、通知推送和执行历史展示。"
         }
     },
+    "NodeSeekSignIn": {
+        "name": "Nodeseek签到自用",
+        "description": "通过 Cookie 自动完成 NodeSeek 每日签到。",
+        "labels": "签到,自动化,消息通知,NodeSeek",
+        "version": "1.0.0",
+        "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png",
+        "author": "Vivitoto",
+        "level": 1,
+        "history": {
+            "v1.0.0": "新增 NodeSeek 签到自用插件：支持 Cookie 签到、随机/固定鸡腿、成员ID用户信息、FlareSolverr 预热、代理、通知、每日记录、执行流水和失败重试。"
+        }
+    },
     "SehuatangSignin": {
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
