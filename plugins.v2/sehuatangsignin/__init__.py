@@ -52,7 +52,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.0.16"
+    plugin_version = "1.0.17"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -769,6 +769,7 @@ class SehuatangSignin(_PluginBase):
                         fs_sid,
                         cookies,
                         max_wait_seconds=self._captcha_fetch_timeout,
+                        browser_session_key=captcha_session_id,
                     )
                 if not captcha_data:
                     result["message"] = "无法获取支持的验证码（slide/rotate/click），或接口限流/超时"
@@ -836,7 +837,13 @@ class SehuatangSignin(_PluginBase):
                 steps.append(f"用户提交：{answer}")
                 logger.info(f"[SehuatangSignin] [{account_id}] 等待全局验证码接口锁，提交 check: {answer}")
                 with self._captcha_fetch_lock, site_captcha_lock():
-                    ok, check_result = submit_check(fs_sid, answer, cap_type, cookies)
+                    ok, check_result = submit_check(
+                        fs_sid,
+                        answer,
+                        cap_type,
+                        cookies,
+                        browser_session_key=captcha_session_id,
+                    )
 
                     if not ok and check_result.get("data") != "safe_gate" and round_no < max_rounds:
                         cooldown = random.uniform(10, 15)
@@ -850,7 +857,7 @@ class SehuatangSignin(_PluginBase):
                 if ok:
                     steps.append("验证码通过 ✅")
                     logger.info(f"[SehuatangSignin] [{account_id}] 验证码通过，提交签到...")
-                    sign_result = complete_signin(fs_sid, cookies)
+                    sign_result = complete_signin(fs_sid, cookies, browser_session_key=captcha_session_id)
                     code = sign_result.get("code", -1)
                     msg = sign_result.get("message", "")
                     steps.append(f"签到结果：{msg}")

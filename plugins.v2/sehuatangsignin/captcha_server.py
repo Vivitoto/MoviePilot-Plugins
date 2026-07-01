@@ -22,6 +22,20 @@ import requests
 from app.log import logger
 
 try:
+    from cloakbrowser import launch as cloak_launch
+    _cloak_import_error = None
+except Exception as err:  # pragma: no cover - depends on MoviePilot runtime image
+    cloak_launch = None
+    _cloak_import_error = err
+
+try:
+    from playwright.sync_api import sync_playwright
+    _playwright_import_error = None
+except Exception as err:  # pragma: no cover - optional local/runtime fallback
+    sync_playwright = None
+    _playwright_import_error = err
+
+try:
     from flask import Flask, redirect, render_template_string, request
 except ImportError:
     Flask = None
@@ -59,6 +73,8 @@ _LEGACY_SESSION_STORE_PATH = os.environ.get(
 )
 _SESSION_LOCK_PATH = f"{_SESSION_STORE_PATH}.lock"
 _SITE_CAPTCHA_LOCK_PATH = f"{_SESSION_STORE_PATH}.site.lock"
+_browser_sessions: dict = {}
+_browser_sessions_lock = threading.Lock()
 try:
     _SESSION_MAX_AGE_SECONDS = max(
         3600,
@@ -145,6 +161,7 @@ def _prune_sessions_unlocked(now: float | None = None) -> bool:
             fs_sid = session.get("fs_sid") if isinstance(session, dict) else None
             _captcha_sessions.pop(account_id, None)
             _destroy_fs_session_later(fs_sid)
+            destroy_browser_session(account_id)
             changed = True
     return changed
 
@@ -512,7 +529,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.5",
+            "version": "1.0.17",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
@@ -646,6 +663,7 @@ def destroy_session(account_id: str, destroy_fs: bool = True):
         _save_sessions_unlocked()
     if destroy_fs and session and session.get("fs_sid"):
         fs_destroy_session(session["fs_sid"])
+    destroy_browser_session(account_id)
 
 
 def set_captcha_data(account_id: str, data: dict, fs_sid: str):
@@ -875,7 +893,22 @@ def _check_headers(fs_sid: str) -> dict:
     return _browser_fetch_headers(fs_sid, content_type="text/plain", include_origin=True)
 
 
+def _is_cf_challenge_html(html: str) -> bool:
+    if not html:
+        return False
+    lower = html.lower()
+    return any(marker in lower for marker in (
+        "enable javascript and cookies to continue",
+        "challenge-error-text",
+        "_cf_chl_opt",
+        "cf-challenge",
+        "cf_chl_",
+    ))
+
+
 def _parse_check_html(html: str) -> dict:
+    if _is_cf_challenge_html(html):
+        return {"code": 403, "message": "Cloudflare challenge returned", "data": "cf_challenge", "raw": html[:300]}
     if "static/safe/js/web.js" in html or "enter-btn" in html or "safeid=" in html:
         return {"code": 403, "message": "safe gate returned", "data": "safe_gate", "raw": html[:300]}
     m = re.search(r"<body>(.+?)</body>", html, re.S)
@@ -900,6 +933,370 @@ def _merge_response_cookiejar(cookies: list, jar):
             "path": c.path or "/",
         })
     _merge_solution_cookies(cookies, returned)
+
+
+def _close_browser_state(state: dict | None):
+    if not isinstance(state, dict):
+        return
+    for key in ("context", "browser"):
+        obj = state.get(key)
+        if obj:
+            try:
+                obj.close()
+            except Exception:
+                pass
+    runner = state.get("runner")
+    if runner:
+        try:
+            runner.stop()
+        except Exception:
+            pass
+
+
+def destroy_browser_session(session_key: str | None):
+    """Close the live browser context associated with a captcha relay session."""
+    if not session_key:
+        return
+    with _browser_sessions_lock:
+        state = _browser_sessions.pop(session_key, None)
+    _close_browser_state(state)
+
+
+def _prune_browser_sessions(max_age_seconds: int = 900):
+    now = time.time()
+    stale = []
+    with _browser_sessions_lock:
+        for key, state in list(_browser_sessions.items()):
+            if now - float(state.get("created_at") or now) > max_age_seconds:
+                stale.append((key, _browser_sessions.pop(key, None)))
+    for key, state in stale:
+        logger.warning(f"[SehuatangCaptcha] Closing stale browser session: {key}")
+        _close_browser_state(state)
+
+
+def _playwright_cookie(item: dict) -> dict | None:
+    if not isinstance(item, dict) or not item.get("name"):
+        return None
+    cookie = {
+        "name": str(item.get("name")),
+        "value": str(item.get("value", "")),
+        "path": item.get("path") or "/",
+    }
+    domain = item.get("domain")
+    if domain:
+        cookie["domain"] = domain
+    else:
+        cookie["url"] = BASE_URL
+    expires = item.get("expires") or item.get("expiry")
+    if isinstance(expires, (int, float)) and expires > 0:
+        cookie["expires"] = expires
+    if "httpOnly" in item:
+        cookie["httpOnly"] = bool(item.get("httpOnly"))
+    if "secure" in item:
+        cookie["secure"] = bool(item.get("secure"))
+    same_site = item.get("sameSite") or item.get("same_site")
+    if same_site in ("Strict", "Lax", "None"):
+        cookie["sameSite"] = same_site
+    return cookie
+
+
+def _merge_browser_cookies(cookies: list, browser_cookies: list):
+    returned = []
+    for c in browser_cookies or []:
+        if not c.get("name"):
+            continue
+        returned.append({
+            "name": c.get("name"),
+            "value": c.get("value", ""),
+            "domain": c.get("domain") or ".sehuatang.net",
+            "path": c.get("path") or "/",
+            **({"expires": c.get("expires")} if c.get("expires") else {}),
+            **({"httpOnly": c.get("httpOnly")} if "httpOnly" in c else {}),
+            **({"secure": c.get("secure")} if "secure" in c else {}),
+            **({"sameSite": c.get("sameSite")} if c.get("sameSite") else {}),
+        })
+    _merge_solution_cookies(cookies, returned)
+
+
+def _launch_cloak_browser():
+    if cloak_launch is None:
+        return None, None, f"cloakbrowser unavailable: {_cloak_import_error}"
+    try:
+        return cloak_launch(headless=True), None, ""
+    except Exception as e:
+        return None, None, f"cloakbrowser launch failed: {e}"
+
+
+def _launch_playwright_browser():
+    if sync_playwright is None:
+        return None, None, f"playwright unavailable: {_playwright_import_error}"
+    runner = None
+    try:
+        runner = sync_playwright().start()
+        return runner.chromium.launch(headless=True), runner, ""
+    except Exception as e:
+        try:
+            if runner:
+                runner.stop()
+        except Exception:
+            pass
+        return None, None, f"playwright launch failed: {e}"
+
+
+def _browser_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
+    """Submit captcha check from a short-lived browser origin before falling back to direct requests."""
+    proxy = _proxy_url_cache.strip()
+    user_agent = _fs_user_agents.get(fs_sid)
+    context_kwargs = {
+        "locale": "zh-CN",
+        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+    }
+    if user_agent:
+        context_kwargs["user_agent"] = user_agent
+    if proxy:
+        context_kwargs["proxy"] = {"server": proxy}
+
+    last_error = "no browser engine available"
+    launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
+    for engine, launcher in launchers:
+        browser, runner, err = launcher()
+        if not browser:
+            last_error = err or last_error
+            logger.debug(f"[SehuatangCaptcha] Browser check skip {engine}: {last_error}")
+            continue
+
+        context = None
+        try:
+            try:
+                context = browser.new_context(**context_kwargs)
+            except TypeError as e:
+                if proxy:
+                    last_error = f"{engine} does not accept proxy context: {e}"
+                    logger.warning(f"[SehuatangCaptcha] Browser check {last_error}")
+                    continue
+                raise
+
+            browser_cookies = [_playwright_cookie(c) for c in (cookies or [])]
+            browser_cookies = [c for c in browser_cookies if c]
+            if browser_cookies:
+                context.add_cookies(browser_cookies)
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(f"{BASE_URL}/plugin.php?id=dd_sign", wait_until="domcontentloaded", timeout=12000)
+            # If Cloudflare shows a JS challenge in the browser itself, give it a
+            # short chance to settle before the same-origin check fetch. Keep the
+            # wait bounded because site captcha TTL is about 30 seconds.
+            try:
+                if _is_cf_challenge_html(page.content()):
+                    settle = max(0.0, min(6.0, float(os.environ.get("SEHUATANG_BROWSER_CHECK_CF_SETTLE_SECONDS", "4"))))
+                    if settle:
+                        logger.info(f"[SehuatangCaptcha] Browser check {engine} saw CF challenge, wait {settle:.1f}s")
+                        time.sleep(settle)
+            except Exception:
+                pass
+            response = page.evaluate(
+                """
+                async ({ url, body }) => {
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: {'Accept': '*/*', 'Content-Type': 'text/plain'},
+                        body,
+                        credentials: 'include',
+                        cache: 'no-store'
+                    });
+                    return {status: resp.status, text: await resp.text()};
+                }
+                """,
+                {"url": url, "body": body},
+            )
+            _merge_browser_cookies(cookies, context.cookies(BASE_URL))
+            result = _parse_check_html(response.get("text") or "")
+            result.setdefault("http_status", response.get("status"))
+            result.setdefault("via", engine)
+            return result
+        except Exception as e:
+            last_error = f"{engine} browser check failed: {e}"
+            logger.warning(f"[SehuatangCaptcha] {last_error}")
+        finally:
+            try:
+                if context:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+            try:
+                if runner:
+                    runner.stop()
+            except Exception:
+                pass
+    return {"code": 599, "message": last_error, "data": "direct_browser_error", "via": "browser"}
+
+
+def _create_browser_state(session_key: str, fs_sid: str, cookies: list) -> dict | None:
+    """Create one live browser page for captcha fetch/check/sign_v2 of a relay session."""
+    _prune_browser_sessions()
+    proxy = _proxy_url_cache.strip()
+    user_agent = _fs_user_agents.get(fs_sid)
+    context_kwargs = {
+        "locale": "zh-CN",
+        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+    }
+    if user_agent:
+        context_kwargs["user_agent"] = user_agent
+    if proxy:
+        context_kwargs["proxy"] = {"server": proxy}
+
+    launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
+    last_error = "no browser engine available"
+    for engine, launcher in launchers:
+        browser = runner = context = page = None
+        try:
+            browser, runner, err = launcher()
+            if not browser:
+                last_error = err or last_error
+                logger.debug(f"[SehuatangCaptcha] Persistent browser skip {engine}: {last_error}")
+                continue
+            try:
+                context = browser.new_context(**context_kwargs)
+            except TypeError as e:
+                if proxy:
+                    last_error = f"{engine} does not accept proxy context: {e}"
+                    logger.warning(f"[SehuatangCaptcha] Persistent browser {last_error}")
+                    _close_browser_state({"browser": browser, "runner": runner})
+                    continue
+                raise
+            browser_cookies = [_playwright_cookie(c) for c in (cookies or [])]
+            browser_cookies = [c for c in browser_cookies if c]
+            if browser_cookies:
+                context.add_cookies(browser_cookies)
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(f"{BASE_URL}/plugin.php?id=dd_sign", wait_until="domcontentloaded", timeout=12000)
+            try:
+                if _is_cf_challenge_html(page.content()):
+                    settle = max(0.0, min(6.0, float(os.environ.get("SEHUATANG_BROWSER_CHECK_CF_SETTLE_SECONDS", "4"))))
+                    if settle:
+                        logger.info(f"[SehuatangCaptcha] Persistent browser {engine} saw CF challenge, wait {settle:.1f}s")
+                        time.sleep(settle)
+            except Exception:
+                pass
+            state = {
+                "engine": engine,
+                "browser": browser,
+                "runner": runner,
+                "context": context,
+                "page": page,
+                "created_at": time.time(),
+                "fs_sid": fs_sid,
+            }
+            with _browser_sessions_lock:
+                old = _browser_sessions.pop(session_key, None)
+                _browser_sessions[session_key] = state
+            _close_browser_state(old)
+            _merge_browser_cookies(cookies, context.cookies(BASE_URL))
+            logger.info(f"[SehuatangCaptcha] Persistent browser session ready via {engine}: {session_key}")
+            return state
+        except Exception as e:
+            last_error = f"{engine} persistent browser failed: {e}"
+            logger.warning(f"[SehuatangCaptcha] {last_error}")
+            _close_browser_state({"context": context, "browser": browser, "runner": runner})
+    logger.warning(f"[SehuatangCaptcha] Persistent browser unavailable: {last_error}")
+    return None
+
+
+def _get_browser_state(session_key: str | None) -> dict | None:
+    if not session_key:
+        return None
+    with _browser_sessions_lock:
+        return _browser_sessions.get(session_key)
+
+
+def _merge_state_cookies(session_key: str | None, cookies: list):
+    state = _get_browser_state(session_key)
+    context = state.get("context") if isinstance(state, dict) else None
+    if context:
+        try:
+            _merge_browser_cookies(cookies, context.cookies(BASE_URL))
+        except Exception:
+            pass
+
+
+def _browser_fetch_text(session_key: str, method: str, url: str, body: str | None = None) -> dict:
+    state = _get_browser_state(session_key)
+    if not state or not state.get("page"):
+        return {"error": "browser_session_missing", "via": "browser"}
+    try:
+        response = state["page"].evaluate(
+            """
+            async ({ method, url, body }) => {
+                const init = {
+                    method,
+                    headers: {'Accept': '*/*'},
+                    credentials: 'include',
+                    cache: 'no-store'
+                };
+                if (body !== null && body !== undefined) {
+                    init.headers['Content-Type'] = 'text/plain';
+                    init.body = body;
+                }
+                const resp = await fetch(url, init);
+                return {status: resp.status, text: await resp.text()};
+            }
+            """,
+            {"method": method, "url": url, "body": body},
+        )
+        return {"status": response.get("status"), "text": response.get("text") or "", "via": state.get("engine") or "browser"}
+    except Exception as e:
+        return {"error": str(e), "via": state.get("engine") or "browser"}
+
+
+def _json_from_html_or_text(text: str) -> dict:
+    if not text:
+        return {}
+    m = re.search(r"<body>(.+?)</body>", text, re.S)
+    payload = m.group(1) if m else text
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _browser_fetch_captcha(session_key: str, cookies: list) -> dict:
+    response = _browser_fetch_text(session_key, "GET", f"{BASE_URL}/misc.php?mod=captcha")
+    _merge_state_cookies(session_key, cookies)
+    if response.get("error"):
+        return {"error": "browser_error", "message": response.get("error"), "via": response.get("via")}
+    if _is_cf_challenge_html(response.get("text") or ""):
+        return {"code": 403, "error": "cf_challenge", "message": "浏览器验证码 fetch 被 Cloudflare challenge 拦截", "via": response.get("via")}
+    cap = _json_from_html_or_text(response.get("text") or "")
+    cap.setdefault("http_status", response.get("status"))
+    cap.setdefault("via", response.get("via"))
+    return cap
+
+
+def _browser_submit_check(session_key: str, answer: str, cookies: list) -> dict:
+    response = _browser_fetch_text(session_key, "POST", f"{BASE_URL}/misc.php?mod=captcha&action=check", answer)
+    _merge_state_cookies(session_key, cookies)
+    if response.get("error"):
+        return {"code": 599, "message": response.get("error"), "data": "browser_error", "via": response.get("via")}
+    result = _parse_check_html(response.get("text") or "")
+    result.setdefault("http_status", response.get("status"))
+    result.setdefault("via", response.get("via"))
+    return result
+
+
+def _browser_complete_signin(session_key: str, cookies: list) -> dict:
+    response = _browser_fetch_text(session_key, "GET", f"{BASE_URL}/plugin.php?id=dd_sign&ac=sign_v2")
+    _merge_state_cookies(session_key, cookies)
+    if response.get("error"):
+        return {"code": 599, "message": response.get("error"), "via": response.get("via")}
+    result = _json_from_html_or_text(response.get("text") or "")
+    result.setdefault("http_status", response.get("status"))
+    result.setdefault("via", response.get("via"))
+    return result
 
 
 def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
@@ -930,26 +1327,19 @@ def _direct_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
 
 
 def fs_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
-    # Check endpoint is sensitive to browser/XHR context. Direct requests with
-    # FS-updated cookies has proven closer than FlareSolverr request.post, which
-    # can trigger safe_gate and invalidate the current captcha state.
-    direct_result = _direct_check_post(fs_sid, url, body, cookies)
-    if direct_result.get("data") != "direct_error":
-        logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
-        return direct_result
+    # Check endpoint is sensitive to browser/XHR context. Prefer a real browser
+    # same-origin fetch; direct Python requests are only a fallback when no
+    # browser engine is available. Never use FlareSolverr request.post here: it
+    # has repeatedly converted recoverable check failures into safe_gate.
+    browser_result = _browser_check_post(fs_sid, url, body, cookies)
+    if browser_result.get("data") != "direct_browser_error":
+        logger.info(f"[SehuatangCaptcha] Browser check result via {browser_result.get('via')}: {browser_result.get('data') or browser_result.get('message')}")
+        return browser_result
+    logger.warning(f"[SehuatangCaptcha] Browser check unavailable, falling back to direct POST: {browser_result.get('message')}")
 
-    r = fs_call(fs_sid, {
-        "cmd": "request.post",
-        "url": url,
-        "postData": body,
-        "headers": _check_headers(fs_sid),
-        "maxTimeout": 30000,
-    }, cookies)
-    html = r.get("html", "")
-    result = _parse_check_html(html)
-    result.setdefault("via", "flaresolverr")
-    logger.info(f"[SehuatangCaptcha] Direct check failed; FlareSolverr check result: {result.get('data')}")
-    return result
+    direct_result = _direct_check_post(fs_sid, url, body, cookies)
+    logger.info(f"[SehuatangCaptcha] Direct check result: {direct_result.get('data') or direct_result.get('message')}")
+    return direct_result
 
 
 def extract_json(html: str) -> dict:
@@ -970,7 +1360,8 @@ def _strip_data_uri(value: str) -> str:
 
 
 def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | None = None,
-                              max_wait_seconds: int = 300) -> dict | None:
+                              max_wait_seconds: int = 300,
+                              browser_session_key: str | None = None) -> dict | None:
     """Fetch a supported captcha from sehuatang.
 
     Supported manual relay types: slide, rotate, click. Drag is unsupported for
@@ -978,8 +1369,17 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
     captcha appears, the endpoint rate-limits, or the total wait cap expires.
     """
     supported_types = {"slide", "rotate", "click"}
+    if max_retries is None:
+        max_retries = 4
     attempt = 0
     deadline = time.time() + max(1, int(max_wait_seconds or 300))
+    use_browser = False
+    if browser_session_key:
+        use_browser = _create_browser_state(browser_session_key, fs_sid, cookies) is not None
+        if use_browser:
+            logger.info(f"[SehuatangCaptcha] Captcha fetch will use persistent browser session: {browser_session_key}")
+        else:
+            logger.warning("[SehuatangCaptcha] Persistent browser unavailable; captcha fetch falls back to FlareSolverr")
     while (max_retries is None or attempt < max_retries) and time.time() < deadline:
         attempt += 1
         if attempt > 1:
@@ -992,12 +1392,18 @@ def fetch_captcha_for_account(fs_sid: str, cookies: list, max_retries: int | Non
             delay = min(random.uniform(15, 30), remaining)
             logger.debug(f"[SehuatangCaptcha] Waiting {delay:.1f}s before captcha retry")
             time.sleep(delay)
-        html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies, headers=_captcha_headers(fs_sid))
-        cap = extract_json(html)
+        if use_browser:
+            cap = _browser_fetch_captcha(browser_session_key, cookies)
+        else:
+            html = fs_get(fs_sid, f"{BASE_URL}/misc.php?mod=captcha", cookies, headers=_captcha_headers(fs_sid))
+            cap = extract_json(html)
         code = cap.get("code")
         if code == 429:
             logger.warning("[SehuatangCaptcha] Captcha endpoint returned 429; stop retrying this account")
             return {"error": "rate_limited", "message": "验证码接口 429 限流，本账号本轮停止获取"}
+        if cap.get("error") in ("cf_challenge", "browser_error"):
+            logger.warning(f"[SehuatangCaptcha] Captcha fetch error via {cap.get('via')}: {cap.get('message') or cap.get('error')}")
+            return cap
         data = cap.get("data", {})
         if not data or not data.get("type"):
             logger.debug(f"[SehuatangCaptcha] Attempt {attempt}: no captcha type, code={code}")
@@ -1039,16 +1445,26 @@ def check_sign_status(fs_sid: str, cookies: list) -> tuple:
     return False, "N/A"
 
 
-def submit_check(fs_sid: str, answer: str, cap_type: str, cookies: list) -> tuple:
+def submit_check(fs_sid: str, answer: str, cap_type: str, cookies: list,
+                 browser_session_key: str | None = None) -> tuple:
     """Submit raw captcha answer. Returns (ok, result_dict)."""
-    result = fs_post(fs_sid, f"{BASE_URL}/misc.php?mod=captcha&action=check", answer, cookies)
+    if browser_session_key and _get_browser_state(browser_session_key):
+        result = _browser_submit_check(browser_session_key, answer, cookies)
+        logger.info(
+            f"[SehuatangCaptcha] Persistent browser check result via {result.get('via')}: "
+            f"{result.get('data') or result.get('message')}"
+        )
+    else:
+        result = fs_post(fs_sid, f"{BASE_URL}/misc.php?mod=captcha&action=check", answer, cookies)
     ok = result.get("data") == "ok"
     logger.info(f"[SehuatangCaptcha] Check {cap_type} answer={answer}: {'OK' if ok else result.get('data','?')}")
     return ok, result
 
 
-def complete_signin(fs_sid: str, cookies: list) -> dict:
+def complete_signin(fs_sid: str, cookies: list, browser_session_key: str | None = None) -> dict:
     """Complete the sign-in after captcha passes."""
+    if browser_session_key and _get_browser_state(browser_session_key):
+        return _browser_complete_signin(browser_session_key, cookies)
     # HAR-confirmed: page JS calls sign_v2 via same-origin browser fetch, not a
     # top-level navigation. Match that shape to avoid subtle session/timing drift.
     html = fs_get(
