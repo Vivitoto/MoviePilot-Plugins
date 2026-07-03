@@ -1,28 +1,16 @@
+import html
+import json
 import random
 import re
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import pytz
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from requests import RequestException
-
-try:
-    from curl_cffi import requests as curl_requests
-    HAS_CURL_CFFI = True
-except Exception:
-    curl_requests = None
-    HAS_CURL_CFFI = False
-
-try:
-    import cloudscraper
-    HAS_CLOUDSCRAPER = True
-except Exception:
-    cloudscraper = None
-    HAS_CLOUDSCRAPER = False
 
 from app.core.config import settings
 from app.core.event import eventmanager, Event
@@ -36,7 +24,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -58,6 +46,10 @@ class NodeSeekSignIn(_PluginBase):
     _flaresolverr_url = "http://127.0.0.1:8191/v1"
     _retry_count = 3
     _retry_interval_minutes = 5
+    _runtime_cookie = ""
+    _runtime_user_agent = ""
+    _runtime_fs_session = ""
+    _runtime_fs_warmed = False
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -158,8 +150,6 @@ class NodeSeekSignIn(_PluginBase):
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         version = getattr(settings, "VERSION_FLAG", "v1")
         cron_field_component = "VCronField" if version == "v2" else "VTextField"
-        curl_status = "✅ 已安装" if HAS_CURL_CFFI else "❌ 未安装"
-        scraper_status = "✅ 已安装" if HAS_CLOUDSCRAPER else "❌ 未安装"
         return [
             {
                 "component": "VForm",
@@ -224,7 +214,7 @@ class NodeSeekSignIn(_PluginBase):
                                     {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "retry_count", "label": "失败重试次数", "type": "number", "placeholder": "3"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "retry_interval_minutes", "label": "重试间隔（分钟）", "type": "number", "placeholder": "5"}}]},
                                     {"component": "VCol", "props": {"cols": 12}, "content": [
-                                        {"component": "div", "props": {"class": "text-body-2 text-medium-emphasis mt-1"}, "text": f"💡 Cookie 是签到必需项；成员ID只用于拉取用户信息。环境状态：curl_cffi {curl_status}，cloudscraper {scraper_status}。"}
+                                        {"component": "div", "props": {"class": "text-body-2 text-medium-emphasis mt-1"}, "text": "💡 Cookie 是签到必需项；成员ID只用于拉取用户信息。遇到 Cloudflare 时建议开启 FlareSolverr；开启后签到和用户信息都会复用同一个 FlareSolverr 浏览器会话。"}
                                     ]},
                                 ]},
                             ],
@@ -428,8 +418,31 @@ class NodeSeekSignIn(_PluginBase):
         digit_match = re.search(r"\d+", text)
         return digit_match.group(0) if digit_match else ""
 
-    def _headers(self, referer: str = "") -> Dict[str, str]:
-        return {
+    @staticmethod
+    def _chrome_major_from_ua(user_agent: str) -> str:
+        match = re.search(r"(?:Chrome|Chromium|CriOS)/(\d+)", user_agent or "")
+        return match.group(1) if match else ""
+
+    @classmethod
+    def _sec_ch_ua_for_user_agent(cls, user_agent: str) -> str:
+        major = cls._chrome_major_from_ua(user_agent) or "134"
+        return f'"Chromium";v="{major}", "Not:A-Brand";v="24", "Google Chrome";v="{major}"'
+
+    @classmethod
+    def _apply_user_agent_headers(cls, headers: Dict[str, str], user_agent: str):
+        if not user_agent:
+            return
+        headers["User-Agent"] = user_agent
+        headers["Sec-CH-UA"] = cls._sec_ch_ua_for_user_agent(user_agent)
+
+    def _headers(
+        self,
+        referer: str = "",
+        cookie: Optional[str] = None,
+        user_agent: str = "",
+        include_cookie: bool = True,
+    ) -> Dict[str, str]:
+        headers = {
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br, zstd",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -442,13 +455,21 @@ class NodeSeekSignIn(_PluginBase):
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-            "Cookie": self._cookie,
         }
+        if include_cookie:
+            headers["Cookie"] = self._cookie if cookie is None else cookie
+        self._apply_user_agent_headers(headers, user_agent)
+        return headers
 
     def _proxies(self) -> Dict[str, str]:
         if not self._use_proxy or not self._proxy_url:
             return {}
         return {"http": self._proxy_url, "https": self._proxy_url}
+
+    def _fs_proxy(self) -> Optional[Dict[str, str]]:
+        if not self._use_proxy or not self._proxy_url:
+            return None
+        return {"url": self._proxy_url}
 
     @staticmethod
     def _looks_like_cf(text: str, status_code: int = 200) -> bool:
@@ -469,68 +490,179 @@ class NodeSeekSignIn(_PluginBase):
                 pairs[str(name)] = str(value)
         return "; ".join(f"{k}={v}" for k, v in pairs.items())
 
-    def _flaresolverr_warm_cookie(self) -> str:
-        payload = {
-            "cmd": "request.get",
-            "url": f"{self._base_url}/board",
-            "maxTimeout": max(self._timeout * 1000, 90000),
-        }
-        if self._use_proxy and self._proxy_url:
-            payload["proxy"] = {"url": self._proxy_url}
-        resp = requests.post(self._flaresolverr_url, json=payload, timeout=max(self._timeout * 4, 90))
+    def _cookie_string_to_fs_cookies(self, cookie: str) -> List[Dict[str, str]]:
+        domain = urlparse(self._base_url).hostname or "www.nodeseek.com"
+        cookies: List[Dict[str, str]] = []
+        for part in (cookie or "").split(";"):
+            if "=" not in part:
+                continue
+            name, value = part.strip().split("=", 1)
+            if not name:
+                continue
+            cookies.append({"name": name, "value": value, "domain": domain, "path": "/"})
+        return cookies
+
+    @staticmethod
+    def _safe_cookie_names(base_cookie: str, new_cookies: List[dict] = None) -> List[str]:
+        names = set()
+        for part in (base_cookie or "").split(";"):
+            if "=" in part:
+                name = part.strip().split("=", 1)[0]
+                if name:
+                    names.add(name)
+        for item in new_cookies or []:
+            name = item.get("name")
+            if name:
+                names.add(str(name))
+        return sorted(names)
+
+    @staticmethod
+    def _cookie_names_text(cookie_names: List[str]) -> str:
+        if not cookie_names:
+            return "-"
+        text = ",".join(cookie_names[:8])
+        if len(cookie_names) > 8:
+            text += f",+{len(cookie_names) - 8}"
+        return text
+
+    def _fs_call(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Dict[str, Any]:
+        resp = requests.post(self._flaresolverr_url, json=payload, timeout=timeout or max(self._timeout * 4, 90))
         resp.raise_for_status()
         data = resp.json()
         if data.get("status") != "ok":
             raise RuntimeError(data.get("message") or "FlareSolverr 调用失败")
+        return data
+
+    def _fs_create_runtime_session(self):
+        if self._runtime_fs_session:
+            return
+        self._runtime_fs_session = f"nodeseek-{int(time.time())}-{random.randint(1000, 9999)}"
+        payload = {"cmd": "sessions.create", "session": self._runtime_fs_session}
+        proxy = self._fs_proxy()
+        if proxy:
+            payload["proxy"] = proxy
+        self._fs_call(payload, timeout=30)
+        self._log_step(f"FlareSolverr 会话已创建：{self._runtime_fs_session}")
+
+    def _fs_destroy_runtime_session(self):
+        sid = self._runtime_fs_session
+        self._runtime_fs_session = ""
+        self._runtime_fs_warmed = False
+        self._runtime_cookie = ""
+        self._runtime_user_agent = ""
+        if not sid:
+            return
+        try:
+            self._fs_call({"cmd": "sessions.destroy", "session": sid}, timeout=30)
+            self._log_step(f"FlareSolverr 会话已销毁：{sid}")
+        except Exception as e:
+            self._log_step(f"FlareSolverr 会话销毁失败（已忽略）：{e}")
+
+    def _update_runtime_from_fs_solution(self, solution: Dict[str, Any], label: str):
+        solution_cookies = solution.get("cookies") or []
+        if solution_cookies:
+            self._runtime_cookie = self._merge_cookie_string(self._runtime_cookie or self._cookie, solution_cookies)
+        elif not self._runtime_cookie:
+            self._runtime_cookie = self._cookie
+        user_agent = solution.get("userAgent") or solution.get("user_agent") or ""
+        if user_agent:
+            self._runtime_user_agent = user_agent
+        cookie_names = self._safe_cookie_names(self._runtime_cookie or self._cookie, solution_cookies)
+        self._log_step(
+            f"FlareSolverr {label}完成："
+            f"HTTP {solution.get('status') or '-'}，"
+            f"Cookie 名称 {self._cookie_names_text(cookie_names)}，"
+            f"UA Chrome/{self._chrome_major_from_ua(self._runtime_user_agent) or '未知'}"
+        )
+
+    def _fs_prepare_session(self):
+        if self._runtime_fs_warmed:
+            return
+        self._fs_create_runtime_session()
+        payload = {
+            "cmd": "request.get",
+            "session": self._runtime_fs_session,
+            "url": f"{self._base_url}/board",
+            "maxTimeout": max(self._timeout * 1000, 90000),
+            "cookies": self._cookie_string_to_fs_cookies(self._cookie),
+            "headers": self._headers(referer=f"{self._base_url}/board", include_cookie=False),
+        }
+        proxy = self._fs_proxy()
+        if proxy:
+            payload["proxy"] = proxy
+        data = self._fs_call(payload)
         solution = data.get("solution") or {}
-        return self._merge_cookie_string(self._cookie, solution.get("cookies") or [])
+        self._update_runtime_from_fs_solution(solution, "预热")
+        text = solution.get("response") or ""
+        if self._looks_like_cf(text, int(solution.get("status") or 200)):
+            raise RuntimeError("FlareSolverr 预热仍返回 Cloudflare 验证页，请检查 FlareSolverr/代理是否可正常过盾")
+        self._runtime_fs_warmed = True
+
+    def _fs_request_json(self, method: str, url: str, referer: str) -> Dict[str, Any]:
+        self._fs_prepare_session()
+        method = method.upper()
+        payload: Dict[str, Any] = {
+            "cmd": "request.post" if method == "POST" else "request.get",
+            "session": self._runtime_fs_session,
+            "url": url,
+            "maxTimeout": max(self._timeout * 1000, 90000),
+            "cookies": self._cookie_string_to_fs_cookies(self._runtime_cookie or self._cookie),
+            "headers": self._headers(
+                referer=referer,
+                user_agent=self._runtime_user_agent,
+                include_cookie=False,
+            ),
+        }
+        if method == "POST":
+            payload["postData"] = ""
+        proxy = self._fs_proxy()
+        if proxy:
+            payload["proxy"] = proxy
+        data = self._fs_call(payload)
+        solution = data.get("solution") or {}
+        self._update_runtime_from_fs_solution(solution, method)
+        status = int(solution.get("status") or 200)
+        text = solution.get("response") or ""
+        if self._looks_like_cf(text, status):
+            raise RuntimeError("请求被 Cloudflare 阻断：FlareSolverr 浏览器会话也未通过，请检查 FlareSolverr 版本或代理质量")
+        return self._parse_json_response(text, status)
+
+    @staticmethod
+    def _parse_json_response(text: str, status: int = 200) -> Dict[str, Any]:
+        try:
+            return json.loads(text)
+        except Exception:
+            pre_match = re.search(r"<pre[^>]*>(.*?)</pre>", text or "", re.I | re.S)
+            if pre_match:
+                try:
+                    return json.loads(html.unescape(pre_match.group(1)).strip())
+                except Exception:
+                    pass
+            start = (text or "").find("{")
+            end = (text or "").rfind("}")
+            if 0 <= start < end:
+                try:
+                    return json.loads(text[start:end + 1])
+                except Exception:
+                    pass
+            snippet = re.sub(r"\s+", " ", text[:160]).strip()
+            raise RuntimeError(f"FlareSolverr 返回非 JSON 响应({status})：{snippet or '空响应'}")
 
     def _request_json(self, method: str, url: str, headers: Dict[str, str]) -> Tuple[Dict[str, Any], str, int]:
-        proxies = self._proxies()
-        if HAS_CURL_CFFI:
-            try:
-                sess = curl_requests.Session(impersonate="chrome110")
-                if proxies:
-                    sess.proxies.update(proxies)
-                resp = sess.request(method, url, headers=headers, timeout=self._timeout)
-                text = resp.text or ""
-                if self._looks_like_cf(text, getattr(resp, "status_code", 200)):
-                    raise RuntimeError("请求被 Cloudflare 阻断")
-                return resp.json(), text, getattr(resp, "status_code", 200)
-            except Exception as e:
-                self._log_step(f"curl_cffi 未拿到可用 JSON，尝试备用请求：{e}")
-
-        if HAS_CLOUDSCRAPER:
-            try:
-                scraper = cloudscraper.create_scraper(browser="chrome")
-                if proxies:
-                    scraper.proxies.update(proxies)
-                resp = scraper.request(method, url, headers=headers, timeout=self._timeout)
-                text = resp.text or ""
-                if self._looks_like_cf(text, resp.status_code):
-                    raise RuntimeError("请求被 Cloudflare 阻断")
-                return resp.json(), text, resp.status_code
-            except Exception as e:
-                self._log_step(f"cloudscraper 未拿到可用 JSON，尝试 requests：{e}")
-
-        resp = requests.request(method, url, headers=headers, proxies=proxies, timeout=self._timeout)
+        resp = requests.request(method, url, headers=headers, proxies=self._proxies(), timeout=self._timeout)
         text = resp.text or ""
         if self._looks_like_cf(text, resp.status_code):
-            raise RuntimeError("请求被 Cloudflare 阻断，可尝试开启 FlareSolverr 或配置代理")
+            raise RuntimeError("请求被 Cloudflare 阻断，请开启 FlareSolverr 或配置代理")
         resp.raise_for_status()
         return resp.json(), text, resp.status_code
 
     def _sign_in(self) -> Dict[str, Any]:
-        cookie = self._cookie
-        if self._use_flaresolverr:
-            try:
-                self._log_step("FlareSolverr 预热 NodeSeek 以获取 cf_clearance")
-                cookie = self._flaresolverr_warm_cookie()
-            except Exception as e:
-                self._log_step(f"FlareSolverr 预热失败，将继续使用原 Cookie：{e}")
         url = f"{self._base_url}/api/attendance?random={'true' if self._random_signin else 'false'}"
-        headers = self._headers(referer=f"{self._base_url}/board")
-        headers["Cookie"] = cookie
+        referer = f"{self._base_url}/board"
+        if self._use_flaresolverr:
+            self._log_step("FlareSolverr 模式：使用同一浏览器会话预热并执行签到")
+            return self._fs_request_json("POST", url, referer)
+        headers = self._headers(referer=referer)
         data, _, _ = self._request_json("POST", url, headers)
         return data
 
@@ -538,8 +670,12 @@ class NodeSeekSignIn(_PluginBase):
         if not self._member_id:
             return {}
         url = f"{self._base_url}/api/account/getInfo/{self._member_id}?readme=1"
-        headers = self._headers(referer=f"{self._base_url}/space/{self._member_id}")
-        data, _, _ = self._request_json("GET", url, headers)
+        referer = f"{self._base_url}/space/{self._member_id}"
+        if self._use_flaresolverr:
+            data = self._fs_request_json("GET", url, referer)
+        else:
+            headers = self._headers(referer=referer)
+            data, _, _ = self._request_json("GET", url, headers)
         if not data.get("success"):
             raise RuntimeError(data.get("message") or "用户信息获取失败")
         detail = data.get("detail") or {}
@@ -715,6 +851,8 @@ class NodeSeekSignIn(_PluginBase):
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
             self._handle_retry_after_result(result, "签到失败（异常）")
             return result
+        finally:
+            self._fs_destroy_runtime_session()
 
     def _handle_retry_after_result(self, result: Dict[str, Any], reason: str):
         if result.get("result_label") in {"成功", "已签到"}:
