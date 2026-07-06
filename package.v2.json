@@ -51,11 +51,12 @@
         "name": "Nodeseek签到自用",
         "description": "通过 Cookie 自动完成 NodeSeek 每日签到。",
         "labels": "签到,自动化,消息通知,NodeSeek",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png",
         "author": "Vivitoto",
         "level": 1,
         "history": {
+            "v1.0.4": "修复 FlareSolverr 预热误判：NodeSeek 正常页面包含普通 Cloudflare 资源痕迹时不再当作验证页，避免已取得 cf_clearance 后仍中断签到。",
             "v1.0.3": "FlareSolverr 开启时改为完整浏览器会话链路：带登录 Cookie 预热后在同一会话执行签到和用户信息请求；移除旧依赖与本地指纹兜底逻辑。",
             "v1.0.2": "新增“使用代理”配置开关：代理地址可保留但仅在开关开启时用于 FlareSolverr 和 requests；保留 v1.0.1 的成员ID链接自动提取修复。",
             "v1.0.1": "修复成员ID配置兼容性：支持填写纯数字或完整 NodeSeek 空间链接，自动提取 /space/ 后的数字用于用户信息接口；优化请求兜底日志文案。",

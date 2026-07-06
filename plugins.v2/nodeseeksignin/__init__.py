@@ -24,7 +24,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -474,7 +474,18 @@ class NodeSeekSignIn(_PluginBase):
     @staticmethod
     def _looks_like_cf(text: str, status_code: int = 200) -> bool:
         lowered = (text or "").lower()
-        return status_code in {403, 503} or "cloudflare" in lowered or "cf-chl" in lowered or "just a moment" in lowered
+        challenge_markers = (
+            "cf-chl",
+            "/cdn-cgi/challenge-platform/",
+            "challenge-platform",
+            "just a moment",
+            "checking your browser",
+            "verify you are human",
+            "attention required! | cloudflare",
+        )
+        if any(marker in lowered for marker in challenge_markers):
+            return True
+        return status_code in {403, 503} and "cloudflare" in lowered
 
     def _merge_cookie_string(self, base_cookie: str, new_cookies: List[dict]) -> str:
         pairs: Dict[str, str] = {}
