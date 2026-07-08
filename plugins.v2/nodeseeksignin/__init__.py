@@ -24,7 +24,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -671,8 +671,15 @@ class NodeSeekSignIn(_PluginBase):
         url = f"{self._base_url}/api/attendance?random={'true' if self._random_signin else 'false'}"
         referer = f"{self._base_url}/board"
         if self._use_flaresolverr:
-            self._log_step("FlareSolverr 模式：使用同一浏览器会话预热并执行签到")
-            return self._fs_request_json("POST", url, referer)
+            self._log_step("FlareSolverr 模式：预热后复用 cf_clearance 与浏览器 UA 执行签到")
+            self._fs_prepare_session()
+            headers = self._headers(
+                referer=referer,
+                cookie=self._runtime_cookie or self._cookie,
+                user_agent=self._runtime_user_agent,
+            )
+            data, _, _ = self._request_json("POST", url, headers)
+            return data
         headers = self._headers(referer=referer)
         data, _, _ = self._request_json("POST", url, headers)
         return data
