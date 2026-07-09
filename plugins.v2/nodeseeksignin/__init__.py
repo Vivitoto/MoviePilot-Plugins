@@ -35,7 +35,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -474,7 +474,7 @@ class NodeSeekSignIn(_PluginBase):
                     raise RuntimeError("请求被 Cloudflare 阻断")
                 return resp.json(), text, status_code
             except Exception as e:
-                self._log_step(f"curl_cffi 未拿到可用 JSON，尝试备用请求：{e}")
+                self._log_step(f"curl_cffi 请求未通过，已切换 cloudscraper：{e}")
 
         if HAS_CLOUDSCRAPER:
             try:
@@ -485,7 +485,7 @@ class NodeSeekSignIn(_PluginBase):
                     raise RuntimeError("请求被 Cloudflare 阻断")
                 return resp.json(), text, resp.status_code
             except Exception as e:
-                self._log_step(f"cloudscraper 未拿到可用 JSON，尝试 requests：{e}")
+                self._log_step(f"cloudscraper 请求未通过，已切换 requests：{e}")
 
         resp = requests.request(method, url, headers=headers, proxies=proxies, timeout=self._timeout)
         text = resp.text or ""
