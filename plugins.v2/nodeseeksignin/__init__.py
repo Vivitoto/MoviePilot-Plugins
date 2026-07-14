@@ -11,9 +11,14 @@ from apscheduler.triggers.cron import CronTrigger
 
 try:
     from curl_cffi import requests as curl_requests
+    try:
+        from curl_cffi.requests.impersonate import DEFAULT_CHROME as CURL_CFFI_IMPERSONATE
+    except Exception:
+        CURL_CFFI_IMPERSONATE = "chrome120"
     HAS_CURL_CFFI = True
 except Exception:
     curl_requests = None
+    CURL_CFFI_IMPERSONATE = "chrome120"
     HAS_CURL_CFFI = False
 
 try:
@@ -35,7 +40,7 @@ class NodeSeekSignIn(_PluginBase):
     plugin_name = "Nodeseek签到自用"
     plugin_desc = "通过 Cookie 自动完成 NodeSeek 每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png"
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "nodeseeksignin_"
@@ -50,11 +55,15 @@ class NodeSeekSignIn(_PluginBase):
     _member_id = ""
     _base_url = "https://www.nodeseek.com"
     _random_signin = True
+    _fetch_user_info = False
     _use_proxy = False
     _proxy_url = ""
     _timeout = 30
     _retry_count = 3
-    _retry_interval_minutes = 5
+    _retry_interval_minutes = 15
+    _runtime_cookie = ""
+    _runtime_curl_session = None
+    _runtime_scraper = None
 
     _scheduler: Optional[BackgroundScheduler] = None
     _history_key = "history"
@@ -75,13 +84,14 @@ class NodeSeekSignIn(_PluginBase):
                 self._member_id = self._normalize_member_id(config.get("member_id"))
                 self._base_url = str(config.get("base_url") or "https://www.nodeseek.com").strip().rstrip("/")
                 self._random_signin = config.get("random_signin", True)
+                self._fetch_user_info = config.get("fetch_user_info", False)
                 self._proxy_url = str(config.get("proxy_url") or "").strip()
                 self._use_proxy = config.get("use_proxy", bool(self._proxy_url))
                 self._timeout = max(1, int(config.get("timeout") or 30))
                 retry_count = config.get("retry_count", 3)
-                retry_interval = config.get("retry_interval_minutes", 5)
+                retry_interval = config.get("retry_interval_minutes", 15)
                 self._retry_count = max(0, int(3 if retry_count in (None, "") else retry_count))
-                self._retry_interval_minutes = max(1, int(5 if retry_interval in (None, "") else retry_interval))
+                self._retry_interval_minutes = max(1, int(15 if retry_interval in (None, "") else retry_interval))
 
             if self._onlyonce:
                 logger.info("Nodeseek签到自用：保存配置后执行一次")
@@ -113,6 +123,7 @@ class NodeSeekSignIn(_PluginBase):
             "member_id": self._member_id,
             "base_url": self._base_url,
             "random_signin": self._random_signin,
+            "fetch_user_info": self._fetch_user_info,
             "use_proxy": self._use_proxy,
             "proxy_url": self._proxy_url,
             "timeout": self._timeout,
@@ -182,8 +193,9 @@ class NodeSeekSignIn(_PluginBase):
                                 {"component": "div", "props": {"class": "text-subtitle-2 font-weight-bold mb-3"}, "text": "🍪 Cookie 与账号"},
                                 {"component": "VRow", "content": [
                                     {"component": "VCol", "props": {"cols": 12}, "content": [{"component": "VTextarea", "props": {"model": "cookie", "label": "NodeSeek Cookie", "rows": 3, "placeholder": "登录 NodeSeek 后从浏览器 Network 请求头复制 Cookie", "auto-grow": True}}]},
-                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "member_id", "label": "成员ID（可选，用于获取用户信息）", "placeholder": "可填纯数字 26589，或完整空间链接 https://www.nodeseek.com/space/26589"}}]},
+                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "member_id", "label": "成员ID（可选，用于刷新用户信息）", "placeholder": "可填纯数字 26589，或完整空间链接 https://www.nodeseek.com/space/26589"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VTextField", "props": {"model": "base_url", "label": "站点地址", "placeholder": "https://www.nodeseek.com"}}]},
+                                    {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": "VSwitch", "props": {"model": "fetch_user_info", "label": "签到后刷新用户信息（会额外请求，可能触发 Cloudflare）"}}]},
                                 ]},
                             ],
                         }],
@@ -213,9 +225,9 @@ class NodeSeekSignIn(_PluginBase):
                                 {"component": "VRow", "content": [
                                     {"component": "VCol", "props": {"cols": 12, "md": 6}, "content": [{"component": cron_field_component, "props": {"model": "cron", "label": "定时任务", "placeholder": "20 8 * * *"}}]},
                                     {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "retry_count", "label": "失败重试次数", "type": "number", "placeholder": "3"}}]},
-                                    {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "retry_interval_minutes", "label": "重试间隔（分钟）", "type": "number", "placeholder": "5"}}]},
+                                    {"component": "VCol", "props": {"cols": 12, "md": 3}, "content": [{"component": "VTextField", "props": {"model": "retry_interval_minutes", "label": "重试间隔（分钟）", "type": "number", "placeholder": "15"}}]},
                                     {"component": "VCol", "props": {"cols": 12}, "content": [
-                                        {"component": "div", "props": {"class": "text-body-2 text-medium-emphasis mt-1"}, "text": f"💡 Cookie 是签到必需项；成员ID只用于拉取用户信息。环境状态：curl_cffi {curl_status}，cloudscraper {scraper_status}。"}
+                                        {"component": "div", "props": {"class": "text-body-2 text-medium-emphasis mt-1"}, "text": f"💡 Cookie 是签到必需项；用户信息刷新默认关闭以减少 Cloudflare 风险。环境状态：curl_cffi {curl_status}，cloudscraper {scraper_status}。"}
                                     ]},
                                 ]},
                             ],
@@ -232,11 +244,12 @@ class NodeSeekSignIn(_PluginBase):
             "member_id": "",
             "base_url": "https://www.nodeseek.com",
             "random_signin": True,
+            "fetch_user_info": False,
             "use_proxy": False,
             "proxy_url": "",
             "timeout": 30,
             "retry_count": 3,
-            "retry_interval_minutes": 5,
+            "retry_interval_minutes": 15,
         }
 
     def get_page(self) -> List[dict]:
@@ -438,8 +451,55 @@ class NodeSeekSignIn(_PluginBase):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         }
         if include_cookie:
-            headers["Cookie"] = self._cookie if cookie is None else cookie
+            headers["Cookie"] = (self._runtime_cookie or self._cookie) if cookie is None else cookie
         return headers
+
+    @staticmethod
+    def _merge_cookie_items(base_cookie: str, cookie_items: Any) -> str:
+        pairs: Dict[str, str] = {}
+        for part in (base_cookie or "").split(";"):
+            if "=" in part:
+                key, value = part.strip().split("=", 1)
+                if key:
+                    pairs[key] = value
+        for name, value in cookie_items or []:
+            if name and value is not None:
+                pairs[str(name)] = str(value)
+        return "; ".join(f"{key}={value}" for key, value in pairs.items())
+
+    def _remember_response_cookies(self, resp: Any):
+        try:
+            cookie_items = list((getattr(resp, "cookies", None) or {}).items())
+        except Exception:
+            cookie_items = []
+        if cookie_items:
+            self._runtime_cookie = self._merge_cookie_items(self._runtime_cookie or self._cookie, cookie_items)
+
+    def _reset_request_clients(self):
+        self._close_request_clients()
+        self._runtime_cookie = self._cookie
+
+    def _close_request_clients(self):
+        for client in (self._runtime_curl_session, self._runtime_scraper):
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+        self._runtime_curl_session = None
+        self._runtime_scraper = None
+
+    def _get_curl_session(self):
+        if not self._runtime_curl_session:
+            self._runtime_curl_session = curl_requests.Session(impersonate=CURL_CFFI_IMPERSONATE)
+            self._log_step(f"curl_cffi 会话已创建：impersonate={CURL_CFFI_IMPERSONATE}")
+        return self._runtime_curl_session
+
+    def _get_cloudscraper(self):
+        if not self._runtime_scraper:
+            self._runtime_scraper = cloudscraper.create_scraper(browser="chrome")
+        return self._runtime_scraper
 
     def _proxies(self) -> Dict[str, str]:
         if not self._use_proxy or not self._proxy_url:
@@ -466,24 +526,30 @@ class NodeSeekSignIn(_PluginBase):
         proxies = self._proxies()
         if HAS_CURL_CFFI:
             try:
-                sess = curl_requests.Session(impersonate="chrome110")
+                sess = self._get_curl_session()
                 resp = sess.request(method, url, headers=headers, proxies=proxies, timeout=self._timeout)
                 status_code = getattr(resp, "status_code", 200)
                 text = resp.text or ""
                 if self._looks_like_cf(text, status_code):
                     raise RuntimeError("请求被 Cloudflare 阻断")
-                return resp.json(), text, status_code
+                data = resp.json()
+                if status_code < 400:
+                    self._remember_response_cookies(resp)
+                return data, text, status_code
             except Exception as e:
                 self._log_step(f"curl_cffi 请求未通过，已切换 cloudscraper：{e}")
 
         if HAS_CLOUDSCRAPER:
             try:
-                scraper = cloudscraper.create_scraper(browser="chrome")
+                scraper = self._get_cloudscraper()
                 resp = scraper.request(method, url, headers=headers, proxies=proxies, timeout=self._timeout)
                 text = resp.text or ""
                 if self._looks_like_cf(text, resp.status_code):
                     raise RuntimeError("请求被 Cloudflare 阻断")
-                return resp.json(), text, resp.status_code
+                data = resp.json()
+                if resp.status_code < 400:
+                    self._remember_response_cookies(resp)
+                return data, text, resp.status_code
             except Exception as e:
                 self._log_step(f"cloudscraper 请求未通过，已切换 requests：{e}")
 
@@ -492,7 +558,9 @@ class NodeSeekSignIn(_PluginBase):
         if self._looks_like_cf(text, resp.status_code):
             raise RuntimeError("请求被 Cloudflare 阻断，可尝试配置代理或稍后重试")
         resp.raise_for_status()
-        return resp.json(), text, resp.status_code
+        data = resp.json()
+        self._remember_response_cookies(resp)
+        return data, text, resp.status_code
 
     def _sign_in(self) -> Dict[str, Any]:
         url = f"{self._base_url}/api/attendance?random={'true' if self._random_signin else 'false'}"
@@ -501,7 +569,7 @@ class NodeSeekSignIn(_PluginBase):
         return data
 
     def _get_user_info(self) -> Dict[str, Any]:
-        if not self._member_id:
+        if not self._fetch_user_info or not self._member_id:
             return {}
         url = f"{self._base_url}/api/account/getInfo/{self._member_id}?readme=1"
         referer = f"{self._base_url}/space/{self._member_id}"
@@ -603,11 +671,20 @@ class NodeSeekSignIn(_PluginBase):
                 f"🍗 鸡腿总数：{result.get('coin', '-')}",
                 f"💬 主题/评论：{result.get('nPost', '-')}/{result.get('nComment', '-')}",
             ])
-        elif self._member_id:
+        elif self._member_id and self._fetch_user_info:
             lines.append("👤 用户信息：获取失败，请检查成员ID或网络")
+        elif self._member_id:
+            lines.append("👤 用户信息：已跳过（未启用刷新）")
         return "\n".join(lines)
 
     def run_once(self, source: str = "manual"):
+        self._reset_request_clients()
+        try:
+            return self._run_once(source=source)
+        finally:
+            self._close_request_clients()
+
+    def _run_once(self, source: str = "manual"):
         steps: List[str] = []
         trigger_text = self._source_text(source)
         if str(source).strip().lower() == "cron":
@@ -655,7 +732,7 @@ class NodeSeekSignIn(_PluginBase):
             steps.append(f"📝 签到返回：{message}")
             self._log_step(f"签到返回：{message}")
 
-            if self._member_id:
+            if self._fetch_user_info and self._member_id:
                 try:
                     info = self._get_user_info()
                     if info:
@@ -665,6 +742,9 @@ class NodeSeekSignIn(_PluginBase):
                 except Exception as info_error:
                     steps.append(f"⚠️ 用户信息获取失败：{info_error}")
                     self._log_step(f"用户信息获取失败：{info_error}")
+            elif self._member_id:
+                steps.append("👤 已配置成员ID，但未启用签到后刷新用户信息，跳过用户信息请求")
+                self._log_step("已配置成员ID但未启用签到后刷新用户信息，跳过用户信息请求")
 
             self._save_result(result)
             if self._notify:

@@ -51,17 +51,17 @@
         "name": "Nodeseek签到自用",
         "description": "通过 Cookie 自动完成 NodeSeek 每日签到。",
         "labels": "签到,自动化,消息通知,NodeSeek",
-        "version": "1.0.8",
+        "version": "1.0.9",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/nodeseeksignin.png",
         "author": "Vivitoto",
         "level": 1,
         "history": {
+            "v1.0.9": "修复运行期请求状态复用：curl_cffi/cloudscraper 单次执行内复用会话并承接响应 Cookie，用户信息刷新默认关闭且仅在显式启用时请求。",
             "v1.0.8": "优化请求兜底日志：curl_cffi/cloudscraper 切换备用链路时使用更清晰的提示，避免误解为最终签到失败。",
             "v1.0.7": "新增 requirements.txt 自动安装 curl_cffi/cloudscraper，并移除 FlareSolverr 配置与代码，改为纯 curl_cffi/cloudscraper/requests 链路。",
             "v1.0.6": "恢复 curl_cffi/cloudscraper 初始请求链路，FlareSolverr 仅作可选 Cookie 预热，避免 FS 会话过盾失败导致签到中断。",
             "v1.0.5": "修复 FlareSolverr 签到 POST 异常：预热取得 cf_clearance 后改用同一浏览器 UA 与 Cookie 直连提交签到，避免 request.post 返回 Cannot GET /api/attendance。",
-            "v1.0.4": "修复 FlareSolverr 预热误判：NodeSeek 正常页面包含普通 Cloudflare 资源痕迹时不再当作验证页，避免已取得 cf_clearance 后仍中断签到。",
-            "v1.0.3": "FlareSolverr 开启时改为完整浏览器会话链路：带登录 Cookie 预热后在同一会话执行签到和用户信息请求；移除旧依赖与本地指纹兜底逻辑。"
+            "v1.0.4": "修复 FlareSolverr 预热误判：NodeSeek 正常页面包含普通 Cloudflare 资源痕迹时不再当作验证页，避免已取得 cf_clearance 后仍中断签到。"
         }
     },
     "SehuatangSignin": {
