@@ -68,17 +68,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.0.17",
+        "version": "1.0.18",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.0.18": "验证码页面新增滑块左右 1px、旋转左右 1° 微调按钮；仅复用现有答案渲染路径，不改验证码获取、校验、重试和签到流程。",
             "v1.0.17": "验证码 fetch/check/sign_v2 优先复用同一个 CloakBrowser/Playwright 浏览器上下文，保留 direct requests 兜底；识别 Cloudflare challenge 并限制 unsupported captcha 刷新次数，降低 429 放大。",
             "v1.0.16": "修正验证码失败重试次数配置：配置为 0 时不再被默认值覆盖，0 可明确表示不进行验证码失败后的额外重试轮次。",
             "v1.0.15": "回退到 1.0.7 验证码主线，仅调整全局验证码获取锁等待时机：在发送验证码链接前先完成等待，避免用户打开验证码页面后才开始排队；FlareSolverr 地址改为要求填写完整 /v1 API 路径；不保留 browser/cloak check 等实验策略。",
             "v1.0.14": "回到 1.0.7 的普通失败重试主线：Cloudflare challenge 不再作为独立策略分支处理，不再输出专门重试文案；与普通验证码失败一样保留 FS 会话并刷新验证码重试。",
-            "v1.0.13": "修复验证码 check 策略：彻底禁用 FlareSolverr request.post fallback，避免 direct_error 被放大成 safe_gate；Cloudflare challenge 不再销毁重建 FS 会话，保留当前会话刷新验证码重试。",
-            "v1.0.12": "修复验证码提交被流控延迟：用户提交答案后的 check 改用只互斥不等待的锁，避免 fetch 后的全局间隔拖慢 check 导致 Cloudflare challenge；check 完成后再为后续轮次/账号设置流控。"
+            "v1.0.13": "修复验证码 check 策略：彻底禁用 FlareSolverr request.post fallback，避免 direct_error 被放大成 safe_gate；Cloudflare challenge 不再销毁重建 FS 会话，保留当前会话刷新验证码重试。"
         }
     },
     "WeWorkIPCB": {

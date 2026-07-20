@@ -249,6 +249,8 @@ CAPTCHA_HTML = """<!DOCTYPE html>
   .rotate-thumb { position:absolute; left:50%; top:50%; width:{{ tw }}px; height:{{ th }}px; margin-left: calc(-{{ tw }}px / 2); margin-top: calc(-{{ th }}px / 2); transform: rotate(0deg); transform-origin: 50% 50%; object-fit: fill; image-rendering: auto; }
   .thumb-preview { box-sizing: content-box; display:block; max-width:none; margin:8px auto; border-radius:6px; border:1px solid #0f3460; background:#fff; padding:6px; object-fit: fill; image-rendering: auto; }
   .range { width: 100%; accent-color: #e94560; }
+  .nudge-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+  .nudge-controls .btn { margin: 0; padding: 12px 8px; min-height: 44px; font-size: 15px; white-space: nowrap; }
   .status-bar { text-align: center; margin: 8px 0; font-size: 0.9em; line-height:1.6; }
   .coord { color: #e94560; font-weight: bold; word-break: break-all; }
   .click-dot { position:absolute; width:22px; height:22px; border-radius:50%; background:#e94560; color:white; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold; transform:translate(-50%,-50%); pointer-events:none; z-index:5; box-shadow:0 0 0 2px rgba(255,255,255,.75); }
@@ -286,6 +288,10 @@ CAPTCHA_HTML = """<!DOCTYPE html>
       <img class="captcha-bg" id="captcha-bg" src="data:image/png;base64,{{ master_b64 }}" alt="captcha" draggable="false">
       {% if thumb_b64 %}<img class="captcha-thumb" id="captcha-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb" draggable="false" style="left:{{ dx }}px; top:{{ dy }}px; width:{{ tw }}px; height:{{ th }}px;">{% endif %}
     </div></div>
+    <div class="nudge-controls">
+      <button class="btn btn-subtle" type="button" onclick="nudgeSlide(-1)" aria-label="左移 1 像素">左移 1px</button>
+      <button class="btn btn-subtle" type="button" onclick="nudgeSlide(1)" aria-label="右移 1 像素">右移 1px</button>
+    </div>
 
   {% elif captcha_type == 'rotate' %}
     <p class="info hint">拖动角度滑条，让图形旋转到正确方向，然后提交。</p>
@@ -294,6 +300,10 @@ CAPTCHA_HTML = """<!DOCTYPE html>
       {% if thumb_b64 %}<img class="rotate-thumb" id="rotate-thumb" src="data:image/png;base64,{{ thumb_b64 }}" alt="thumb" draggable="false">{% endif %}
     </div></div>
     <input class="range" id="rotate-range" type="range" min="0" max="359" value="0" step="1">
+    <div class="nudge-controls">
+      <button class="btn btn-subtle" type="button" onclick="nudgeRotate(-1)" aria-label="左转 1 度">左转 1°</button>
+      <button class="btn btn-subtle" type="button" onclick="nudgeRotate(1)" aria-label="右转 1 度">右转 1°</button>
+    </div>
 
   {% elif captcha_type == 'click' %}
     <p class="info hint">按提示图在背景图上点选；支持多点，按点击顺序提交。</p>
@@ -388,6 +398,11 @@ if (capType === 'slide') {
     const x = Math.round(left), y = Math.round(dy);
     setAnswer(x + ',' + y, '图块位置：(' + x + ',' + y + ')');
   }
+  function nudgeSlide(delta) {
+    if (!thumb) return;
+    left = clamp(Math.round(left) + delta, 0, masterW - tw);
+    render();
+  }
   function point(e) {
     const t = e.touches ? e.touches[0] : e;
     const target = bg || area;
@@ -419,6 +434,7 @@ if (capType === 'slide') {
     thumb.addEventListener('mousedown', onStart);
     thumb.addEventListener('touchstart', onStart, {passive:false});
   }
+  window.nudgeSlide = nudgeSlide;
 }
 
 if (capType === 'rotate') {
@@ -433,6 +449,14 @@ if (capType === 'rotate') {
     range.addEventListener('input', function() { renderAngle(true); });
     renderAngle(false);
   }
+  function nudgeRotate(delta) {
+    if (!range) return;
+    const current = parseInt(range.value || '0', 10);
+    const angle = (current + delta + 360) % 360;
+    range.value = String(angle);
+    renderAngle(true);
+  }
+  window.nudgeRotate = nudgeRotate;
 }
 
 const clickPoints = [];
@@ -529,7 +553,7 @@ def create_app():
         return {
             "ok": True,
             "plugin": "SehuatangSignin",
-            "version": "1.0.17",
+            "version": "1.0.18",
             "sessionStorePath": _SESSION_STORE_PATH,
             "legacySessionStorePath": _LEGACY_SESSION_STORE_PATH,
             "sessionCount": session_count,
