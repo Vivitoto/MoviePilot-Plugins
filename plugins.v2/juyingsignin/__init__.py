@@ -7,7 +7,7 @@ import pytz
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from requests import RequestException
+from requests.exceptions import HTTPError, RequestException, SSLError
 
 from app.core.config import settings
 from app.core.event import eventmanager, Event
@@ -17,11 +17,15 @@ from app.schemas import NotificationType
 from app.schemas.types import EventType
 
 
+class NonRetryableSiteError(RuntimeError):
+    """The configured site/API is unavailable in a deterministic way."""
+
+
 class JuyingSignIn(_PluginBase):
     plugin_name = "聚影签到自用"
     plugin_desc = "自动登录聚影并完成每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/juyingsignin.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "juyingsignin_"
@@ -377,16 +381,49 @@ class JuyingSignIn(_PluginBase):
     def _api_url(self, path: str) -> str:
         return f"{self._base_url.rstrip('/')}/{path.lstrip('/')}"
 
+    @staticmethod
+    def _is_certificate_config_error(error: RequestException) -> bool:
+        if not isinstance(error, SSLError):
+            return False
+        message = str(error).lower()
+        return any(
+            keyword in message
+            for keyword in (
+                "certificate verify failed",
+                "certificate_verify_failed",
+                "hostname mismatch",
+                "hostname",
+                "doesn't match",
+                "not valid for",
+            )
+        )
+
+    def _raise_non_retryable_request_error(self, action: str, error: RequestException):
+        if self._is_certificate_config_error(error):
+            raise NonRetryableSiteError(
+                f"{action}接口证书校验失败，站点证书配置异常，无法通过重试恢复：{error}"
+            ) from error
+
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if isinstance(error, HTTPError) and status_code == 404:
+            url = getattr(response, "url", "") or "接口地址未知"
+            raise NonRetryableSiteError(
+                f"{action}接口不可用（HTTP 404），站点 API 端点可能已变更或下线，无法通过重试恢复：{url}"
+            ) from error
+
     def _login(self, session: requests.Session) -> Tuple[str, Dict[str, Any]]:
+        url = self._api_url("/api/app/login/")
         try:
             resp = session.post(
-                self._api_url("/api/app/login/"),
+                url,
                 json={"username": self._username, "password": self._password},
                 timeout=self._timeout,
             )
             resp.raise_for_status()
             data = resp.json()
         except RequestException as e:
+            self._raise_non_retryable_request_error("登录", e)
             raise RuntimeError(f"登录请求失败：{e}") from e
         except ValueError as e:
             raise RuntimeError("登录响应不是有效 JSON") from e
@@ -400,11 +437,13 @@ class JuyingSignIn(_PluginBase):
 
     def _checkin(self, session: requests.Session, token: str) -> Dict[str, Any]:
         headers = {"x-app-user-token": token}
+        url = self._api_url("/api/app/checkin/do/")
         try:
-            resp = session.post(self._api_url("/api/app/checkin/do/"), headers=headers, timeout=self._timeout)
+            resp = session.post(url, headers=headers, timeout=self._timeout)
             resp.raise_for_status()
             return resp.json()
         except RequestException as e:
+            self._raise_non_retryable_request_error("签到", e)
             raise RuntimeError(f"签到请求失败：{e}") from e
         except ValueError as e:
             raise RuntimeError("签到响应不是有效 JSON") from e
@@ -492,6 +531,22 @@ class JuyingSignIn(_PluginBase):
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _mark_failed_result(
+        result: Dict[str, Any],
+        message: str,
+        retryable: bool = True,
+        failure_type: str = "",
+    ):
+        if result["login_status"] == "未开始":
+            result["login_status"] = "失败"
+            result["signin_status"] = "未执行"
+        else:
+            result["signin_status"] = "失败"
+        result.update({"result_label": "失败", "message": message, "finished": True, "retryable": retryable})
+        if failure_type:
+            result["failure_type"] = failure_type
+
     def run_once(self, source: str = "manual"):
         steps: List[str] = []
         trigger_text = self._source_text(source)
@@ -517,6 +572,7 @@ class JuyingSignIn(_PluginBase):
             "proxy_used": self._proxy_url if self._use_proxy and self._proxy_url else "未启用",
             "steps": steps,
             "finished": False,
+            "retryable": True,
         }
 
         if not self._username or not self._password:
@@ -577,15 +633,20 @@ class JuyingSignIn(_PluginBase):
                 self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
             self._handle_retry_after_result(result, "签到失败")
             return result
+        except NonRetryableSiteError as e:
+            steps.append(f"💥 执行失败：{str(e)}")
+            self._log_step(f"执行失败：{str(e)}")
+            self._mark_failed_result(result, str(e), retryable=False, failure_type="site_api_unavailable")
+            self._save_result(result)
+            logger.error(f"聚影签到自用执行失败：{str(e)}", exc_info=True)
+            if self._notify:
+                self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+            self._handle_retry_after_result(result, "签到失败（站点/API不可用）")
+            return result
         except Exception as e:
             steps.append(f"💥 执行失败：{str(e)}")
             self._log_step(f"执行失败：{str(e)}")
-            if result["login_status"] == "未开始":
-                result["login_status"] = "失败"
-                result["signin_status"] = "未执行"
-            else:
-                result["signin_status"] = "失败"
-            result.update({"result_label": "失败", "message": str(e), "finished": True})
+            self._mark_failed_result(result, str(e))
             self._save_result(result)
             logger.error(f"聚影签到自用执行失败：{str(e)}", exc_info=True)
             if self._notify:
@@ -595,6 +656,18 @@ class JuyingSignIn(_PluginBase):
 
     def _handle_retry_after_result(self, result: Dict[str, Any], reason: str):
         if result.get("result_label") in {"成功", "已签到"}:
+            if self.get_data(self._retry_state_key):
+                self.save_data(self._retry_state_key, None)
+            return
+        if result.get("retryable") is False:
+            self._log_step(
+                f"{reason}，判定为不可重试：站点/API/证书配置无效或接口不可用，不安排失败重试"
+            )
+            if self._scheduler:
+                try:
+                    self._scheduler.remove_job(f"{self.plugin_config_prefix}retry")
+                except Exception:
+                    pass
             if self.get_data(self._retry_state_key):
                 self.save_data(self._retry_state_key, None)
             return
