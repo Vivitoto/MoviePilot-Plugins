@@ -58,7 +58,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -143,6 +143,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_history_key = "auto_reply_history"
     _auto_replied_threads_key = "auto_replied_threads"
     _auto_reply_success_key = "auto_reply_success_by_day"
+    _auto_reply_status_labels = {"success": "成功", "failed": "失败", "skipped": "跳过"}
 
     def init_plugin(self, config: dict = None):
         self.stop_service()
@@ -823,12 +824,12 @@ class SehuatangSignin(_PluginBase):
         for _, account, account_id in self._indexed_accounts():
             claimed, reason = self._claim_auto_reply_run(account_id, today)
             if not claimed:
-                result = {"success": False, "skipped": True, "message": reason or "自动回帖正在进行中"}
+                result = self._auto_reply_result("skipped", reason or "自动回帖正在进行中")
                 self._record_auto_reply_result(account_id, result)
                 self._notify_auto_reply_result(account_id, result)
                 continue
             try:
-                result = self._auto_reply_single(account, account_id, forum_ids)
+                result = self._normalize_auto_reply_result(self._auto_reply_single(account, account_id, forum_ids))
                 self._record_auto_reply_result(account_id, result)
                 self._notify_auto_reply_result(account_id, result)
             finally:
@@ -1041,7 +1042,7 @@ class SehuatangSignin(_PluginBase):
 
         forum_ids = self._parse_forum_ids(self._auto_reply_forum_ids)
         if not forum_ids:
-            result = {"success": False, "skipped": True, "message": "无有效版块 ID"}
+            result = self._auto_reply_result("skipped", "无有效版块 ID")
         else:
             claimed, reason = self._claim_auto_reply_run(account_id, today)
             if not claimed:
@@ -1052,16 +1053,18 @@ class SehuatangSignin(_PluginBase):
                 result = self._auto_reply_single(account, account_id, forum_ids)
             finally:
                 self._release_auto_reply_run(account_id, today)
+        result = self._normalize_auto_reply_result(result)
         result["attempt_index"] = attempt_index
+        result_status = self._auto_reply_result_status(result)
         self._record_auto_reply_result(account_id, result)
         self._update_auto_reply_plan_status(
             account_id,
             plan_date,
-            "done" if result.get("success") else ("skipped" if result.get("skipped") else "failed"),
-            result.get("message", ""),
+            "done" if result_status == "success" else result_status,
+            result.get("reason") or result.get("message", ""),
             attempt_index=attempt_index,
         )
-        if result.get("success"):
+        if result_status == "success":
             self._skip_remaining_auto_reply_plan_jobs(account_id, plan_date, attempt_index)
         self._notify_auto_reply_result(account_id, result)
 
@@ -1087,8 +1090,8 @@ class SehuatangSignin(_PluginBase):
             cookies = self._build_cookies(account)
             fs_sid = fs_create_session()
             if not fs_sid:
-                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖跳过：FS 会话创建失败")
-                return {"success": False, "skipped": True, "message": "无法创建 FlareSolverr 会话"}
+                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖失败：FS 会话创建失败")
+                return self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")
 
             all_candidates = []
             seen_tids = set()
@@ -1115,7 +1118,7 @@ class SehuatangSignin(_PluginBase):
                 message = "无可用候选帖"
                 if skipped_candidates:
                     message = f"候选帖均不合适（已跳过 {skipped_candidates} 个）"
-                return {"success": False, "skipped": True, "message": message}
+                return self._auto_reply_result("skipped", message)
 
             all_candidates = self._sort_auto_reply_candidates_by_newness(all_candidates)
             last_skip_message = "候选帖均未通过安全评估"
@@ -1135,13 +1138,38 @@ class SehuatangSignin(_PluginBase):
                     last_skip_message = reason or last_skip_message
                     continue
 
-                assessment = self._assess_auto_reply_with_ai(detail)
+                try:
+                    assessment = self._assess_auto_reply_with_ai(detail)
+                except RuntimeError as e:
+                    if str(e).startswith("AI调用失败"):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 失败：{e}")
+                        return self._auto_reply_result(
+                            "failed",
+                            str(e),
+                            fid=detail.get("fid"),
+                            tid=tid,
+                            title=detail.get("title"),
+                        )
+                    raise
                 if not assessment:
                     logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 跳过：AI 评估未通过")
                     last_skip_message = "AI 评估未通过"
                     continue
 
-                reply = self._polish_auto_reply_with_ai(detail, assessment)
+                try:
+                    reply = self._polish_auto_reply_with_ai(detail, assessment)
+                except RuntimeError as e:
+                    if str(e).startswith("AI调用失败"):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 失败：{e}")
+                        return self._auto_reply_result(
+                            "failed",
+                            str(e),
+                            fid=detail.get("fid"),
+                            tid=tid,
+                            title=detail.get("title"),
+                            risk_reasons=assessment.get("risk_reasons", []),
+                        )
+                    raise
                 if not reply:
                     logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 跳过：AI 未返回合格短回复")
                     last_skip_message = "AI 未返回合格短回复"
@@ -1159,24 +1187,24 @@ class SehuatangSignin(_PluginBase):
                     f"标题={detail.get('title') or '-'} 回复={reply}"
                 )
                 post_result = self._submit_auto_reply(fs_sid, cookies, detail, reply)
-                result = {
-                    "success": bool(post_result.get("success")),
-                    "skipped": not post_result.get("success"),
-                    "fid": detail.get("fid"),
-                    "tid": tid,
-                    "title": detail.get("title"),
-                    "message": post_result.get("message") or ("回帖成功" if post_result.get("success") else "回帖失败"),
-                    "reply_summary": reply[:30],
-                    "risk_reasons": assessment.get("risk_reasons", []),
-                }
-                if result["success"]:
+                result = self._auto_reply_result(
+                    self._auto_reply_result_status(post_result),
+                    post_result.get("reason") or post_result.get("message") or
+                    ("回帖成功" if post_result.get("success") else "回帖失败"),
+                    fid=detail.get("fid"),
+                    tid=tid,
+                    title=detail.get("title"),
+                    reply_summary=reply[:30],
+                    risk_reasons=assessment.get("risk_reasons", []),
+                )
+                if self._auto_reply_result_status(result) == "success":
                     self._mark_auto_replied_thread(account_id, detail)
                 return result
 
-            return {"success": False, "skipped": True, "message": last_skip_message}
+            return self._auto_reply_result("skipped", last_skip_message)
         except Exception as e:
             logger.error(f"[SehuatangSignin] [{account_id}] 自动回帖异常：{traceback.format_exc()}")
-            return {"success": False, "skipped": True, "message": f"异常：{str(e)}"}
+            return self._auto_reply_result("failed", f"异常：{str(e)}")
         finally:
             if fs_sid:
                 fs_destroy_session(fs_sid)
@@ -1192,6 +1220,62 @@ class SehuatangSignin(_PluginBase):
     @staticmethod
     def _auto_reply_now() -> datetime:
         return datetime.now(tz=pytz.timezone(settings.TZ))
+
+    @classmethod
+    def _normalize_auto_reply_status_value(cls, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"success", "succeeded", "done", "ok", "成功"}:
+            return "success"
+        if text in {"failed", "failure", "fail", "error", "failed_error", "失败"}:
+            return "failed"
+        if text in {"skipped", "skip", "ignored", "跳过"}:
+            return "skipped"
+        return ""
+
+    @classmethod
+    def _auto_reply_result_status(cls, result: Any) -> str:
+        if isinstance(result, dict):
+            for key in ("result_status", "result_category", "status"):
+                status = cls._normalize_auto_reply_status_value(result.get(key))
+                if status:
+                    return status
+            if result.get("success"):
+                return "success"
+            if result.get("skipped"):
+                return "skipped"
+            return "failed"
+        return cls._normalize_auto_reply_status_value(result) or "failed"
+
+    @classmethod
+    def _auto_reply_status_label(cls, result: Any) -> str:
+        return cls._auto_reply_status_labels.get(cls._auto_reply_result_status(result), "失败")
+
+    @classmethod
+    def _normalize_auto_reply_result(cls, result: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(result or {})
+        status = cls._auto_reply_result_status(data)
+        label = cls._auto_reply_status_label(status)
+        reason = str(data.get("reason") or data.get("message") or label).strip()
+        data.update({
+            "success": status == "success",
+            "skipped": status == "skipped",
+            "failed": status == "failed",
+            "status": status,
+            "result_status": status,
+            "result_category": status,
+            "result": label,
+            "message": reason,
+            "reason": reason,
+        })
+        return data
+
+    @classmethod
+    def _auto_reply_result(cls, status: str, reason: str, **fields: Any) -> Dict[str, Any]:
+        data = dict(fields)
+        data["status"] = status
+        data["message"] = reason
+        data["reason"] = reason
+        return cls._normalize_auto_reply_result(data)
 
     @staticmethod
     def _parse_forum_ids(value: Any) -> List[str]:
@@ -2046,12 +2130,16 @@ class SehuatangSignin(_PluginBase):
         future = executor.submit(lambda: asyncio.run(self._call_auto_reply_llm(prompt)))
         try:
             return future.result(timeout=max(5, int(self._auto_reply_ai_timeout or 45)))
-        except concurrent.futures.TimeoutError:
+        except concurrent.futures.TimeoutError as e:
             logger.warning(f"[SehuatangSignin] 自动回帖 AI {stage_name}调用超时")
-            return ""
+            raise RuntimeError(f"AI调用失败：{stage_name}调用超时") from e
         except Exception as e:
-            logger.warning(f"[SehuatangSignin] 自动回帖 AI {stage_name}不可用或调用失败：{e}")
-            return ""
+            message = str(e) or e.__class__.__name__
+            if message.startswith("AI调用失败"):
+                logger.warning(f"[SehuatangSignin] 自动回帖 AI {stage_name}调用失败：{message}")
+                raise
+            logger.warning(f"[SehuatangSignin] 自动回帖 AI {stage_name}不可用或调用失败：{message}")
+            raise RuntimeError(f"AI调用失败：{stage_name}不可用或调用失败：{message}") from e
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -2059,14 +2147,14 @@ class SehuatangSignin(_PluginBase):
         try:
             from app.agent.llm import LLMHelper
         except Exception as e:
-            logger.info(f"[SehuatangSignin] 自动回帖跳过：系统 LLM 不可用：{e}")
-            return ""
+            logger.warning(f"[SehuatangSignin] 自动回帖 AI调用失败：系统 LLM 不可用：{e}")
+            raise RuntimeError(f"AI调用失败：系统 LLM 不可用：{e}") from e
 
         llm = LLMHelper.get_llm(streaming=False)
         if inspect.isawaitable(llm):
             llm = await llm
         if not llm:
-            return ""
+            raise RuntimeError("AI调用失败：系统 LLM 不可用")
         if hasattr(llm, "ainvoke"):
             response = llm.ainvoke(prompt)
             if inspect.isawaitable(response):
@@ -2075,7 +2163,7 @@ class SehuatangSignin(_PluginBase):
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, llm.invoke, prompt)
         else:
-            return ""
+            raise RuntimeError("AI调用失败：系统 LLM 不支持调用")
         return self._extract_llm_response_text(response, LLMHelper)
 
     @classmethod
@@ -2297,7 +2385,7 @@ class SehuatangSignin(_PluginBase):
         tid = str(detail.get("tid") or "")
         formhash = str(detail.get("formhash") or "")
         if not fid or not tid or not formhash or not reply:
-            return {"success": False, "message": "缺少回帖参数"}
+            return self._auto_reply_result("failed", "缺少回帖参数")
         post_url = (
             f"{self._base_url}/forum.php?mod=post&action=reply&fid={fid}&tid={tid}"
             "&extra=&replysubmit=yes&infloat=yes&handlekey=fastpost&inajax=1"
@@ -2318,7 +2406,7 @@ class SehuatangSignin(_PluginBase):
             response = self._fs_post(fs_sid, post_url, post_data, cookies, headers=headers)
         except Exception as e:
             logger.warning(f"[SehuatangSignin] 自动回帖 POST 异常：{e}")
-            return {"success": False, "message": f"回帖 POST 异常：{e}"}
+            return self._auto_reply_result("failed", f"回帖 POST 异常：{e}")
         return self._parse_auto_reply_post_result(response.get("html", ""))
 
     def _fs_post(self, fs_sid: str, url: str, post_data: str, cookies: list,
@@ -2362,10 +2450,13 @@ class SehuatangSignin(_PluginBase):
             "未定义操作", "请不要重复发帖", "两次发表间隔", "包含不良内容", "审核",
         ]
         if any(marker.lower() in lower or marker in compact for marker in failure_markers):
-            return {"success": False, "message": compact[:120] or "回帖失败"}
+            return cls._auto_reply_result("failed", compact[:120] or "回帖失败")
         if any(marker.lower() in lower or marker in compact for marker in success_markers):
-            return {"success": True, "message": "回帖成功"}
-        return {"success": False, "message": compact[:120] or "回帖结果未知"}
+            return cls._auto_reply_result("success", "回帖成功")
+        unknown_message = compact[:120]
+        if unknown_message:
+            unknown_message = f"回帖结果未知：{unknown_message}"
+        return cls._auto_reply_result("failed", unknown_message or "回帖结果未知")
 
     def _has_auto_reply_record_for_day(self, account_id: str, day: str) -> bool:
         history = self.get_data(self._auto_reply_history_key) or []
@@ -2505,22 +2596,31 @@ class SehuatangSignin(_PluginBase):
         if not isinstance(history, list):
             history = []
         now = self._auto_reply_now()
+        result = self._normalize_auto_reply_result(result)
+        status = self._auto_reply_result_status(result)
+        reason = str(result.get("reason") or result.get("message") or "")[:160]
         history.insert(0, {
             "time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "date": now.strftime("%Y-%m-%d"),
             "account": account_id,
             "attempt_index": int(result.get("attempt_index") or 1),
-            "success": bool(result.get("success")),
-            "skipped": bool(result.get("skipped", not result.get("success"))),
+            "success": status == "success",
+            "skipped": status == "skipped",
+            "failed": status == "failed",
+            "status": status,
+            "result_status": status,
+            "result_category": status,
+            "result": self._auto_reply_status_label(status),
             "fid": str(result.get("fid") or ""),
             "tid": str(result.get("tid") or ""),
             "title": str(result.get("title") or "")[:160],
-            "message": str(result.get("message") or "")[:160],
+            "message": reason,
+            "reason": reason,
             "reply_summary": str(result.get("reply_summary") or "")[:60],
             "risk_reasons": result.get("risk_reasons") or [],
         })
         self.save_data(self._auto_reply_history_key, history[:100])
-        if result.get("success"):
+        if status == "success":
             self._mark_auto_reply_success_for_day(account_id, result)
 
     def _update_auto_reply_plan_status(self, account_id: str, plan_date: str, status: str, message: str = "",
@@ -2568,19 +2668,27 @@ class SehuatangSignin(_PluginBase):
     def _notify_auto_reply_result(self, account_id: str, result: Dict[str, Any]):
         if not self._notify:
             return
-        status = "成功" if result.get("success") else "跳过"
+        result = self._normalize_auto_reply_result(result)
+        status = self._auto_reply_result_status(result)
+        label = self._auto_reply_status_label(status)
         lines = [
             f"账号：{account_id}",
-            f"结果：{status}",
-            f"原因：{result.get('message') or '-'}",
+            f"结果：{label}",
+            f"原因：{result.get('reason') or result.get('message') or '-'}",
         ]
+        if result.get("attempt_index") is not None:
+            lines.append(f"attempt_index：{result.get('attempt_index')}")
+        if result.get("fid"):
+            lines.append(f"fid：{result.get('fid')}")
         if result.get("tid"):
-            lines.append(f"主题：{result.get('tid')} {result.get('title') or ''}".strip())
+            lines.append(f"tid：{result.get('tid')}")
+        if result.get("title"):
+            lines.append(f"标题：{result.get('title')}")
         if result.get("reply_summary"):
-            lines.append(f"回复：{result.get('reply_summary')}")
+            lines.append(f"回复摘要：{result.get('reply_summary')}")
         self.post_message(
             mtype=NotificationType.Plugin,
-            title=f"98自动回帖{status}",
+            title=f"98自动回帖{label}",
             text="\n".join(lines),
         )
 
@@ -2606,11 +2714,11 @@ class SehuatangSignin(_PluginBase):
         for item in recent_history:
             if not isinstance(item, dict):
                 continue
-            icon = "成功" if item.get("success") else "跳过"
+            icon = item.get("result") or self._auto_reply_status_label(item)
             history_lines.append({
                 'component': 'div',
                 'props': {'class': 'text-caption text-medium-emphasis text-truncate'},
-                'text': f"{item.get('time', '-')} {item.get('account', '-')} {icon}：{item.get('message', '-')}",
+                'text': f"{item.get('time', '-')} {item.get('account', '-')} {icon}：{item.get('reason') or item.get('message', '-')}",
             })
         content = [
             {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': '自动回帖'},

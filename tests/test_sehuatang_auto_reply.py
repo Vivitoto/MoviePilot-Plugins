@@ -54,7 +54,7 @@ def _if_guard_for_name(method_node: ast.FunctionDef, name: str) -> ast.If:
 class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_plugin_version_is_current(self):
         source = _source()
-        self.assertIn('plugin_version = "1.1.0"', source)
+        self.assertIn('plugin_version = "1.1.1"', source)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -526,6 +526,69 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("account_uids", manual_reply_body)
         self.assertIn("account_names", manual_reply_body)
         self.assertIn('item.get("post_authors")', manual_reply_body)
+
+    def test_auto_reply_result_notifications_distinguish_success_failure_and_skip(self):
+        source = _source()
+        notify_body = _method_source(source, "_notify_auto_reply_result")
+        record_body = _method_source(source, "_record_auto_reply_result")
+        run_body = _method_source(source, "_run_auto_reply_for_account")
+        auto_body = _method_source(source, "_auto_reply_single")
+        submit_body = _method_source(source, "_submit_auto_reply")
+        parse_body = _method_source(source, "_parse_auto_reply_post_result")
+        llm_timeout_body = _method_source(source, "_call_auto_reply_llm_with_timeout")
+        llm_body = _method_source(source, "_call_auto_reply_llm")
+
+        for method in [
+            "_normalize_auto_reply_status_value",
+            "_auto_reply_result_status",
+            "_auto_reply_status_label",
+            "_normalize_auto_reply_result",
+            "_auto_reply_result",
+        ]:
+            self.assertIn(f"def {method}", source)
+        self.assertIn('_auto_reply_status_labels = {"success": "成功", "failed": "失败", "skipped": "跳过"}', source)
+
+        for token in [
+            'title=f"98自动回帖{label}"',
+            'f"结果：{label}"',
+            'attempt_index：',
+            'fid：',
+            'tid：',
+            '标题：',
+            '回复摘要：',
+        ]:
+            self.assertIn(token, notify_body)
+        self.assertIn("result.get('reason') or result.get('message')", notify_body)
+
+        for token in [
+            '"failed": status == "failed"',
+            '"status": status',
+            '"result_status": status',
+            '"result_category": status',
+            '"result": self._auto_reply_status_label(status)',
+            '"reason": reason',
+        ]:
+            self.assertIn(token, record_body)
+        self.assertIn('"done" if result_status == "success" else result_status', run_body)
+
+        self.assertIn('self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")', auto_body)
+        self.assertIn('self._auto_reply_result("skipped", message)', auto_body)
+        self.assertIn('self._auto_reply_result("skipped", last_skip_message)', auto_body)
+        self.assertIn('self._auto_reply_result("failed", f"异常：{str(e)}")', auto_body)
+        self.assertIn('str(e).startswith("AI调用失败")', auto_body)
+        self.assertIn('self._auto_reply_result(\n                            "failed",\n                            str(e),', auto_body)
+
+        self.assertIn('self._auto_reply_result("failed", "缺少回帖参数")', submit_body)
+        self.assertIn('self._auto_reply_result("failed", f"回帖 POST 异常：{e}")', submit_body)
+        self.assertIn('cls._auto_reply_result("failed", compact[:120] or "回帖失败")', parse_body)
+        self.assertIn('cls._auto_reply_result("success", "回帖成功")', parse_body)
+        self.assertIn('cls._auto_reply_result("failed", unknown_message or "回帖结果未知")', parse_body)
+
+        self.assertIn('raise RuntimeError(f"AI调用失败：{stage_name}调用超时")', llm_timeout_body)
+        self.assertIn('raise RuntimeError(f"AI调用失败：{stage_name}不可用或调用失败：{message}")', llm_timeout_body)
+        self.assertIn('raise RuntimeError(f"AI调用失败：系统 LLM 不可用：{e}")', llm_body)
+        self.assertIn('raise RuntimeError("AI调用失败：系统 LLM 不可用")', llm_body)
+        self.assertIn('raise RuntimeError("AI调用失败：系统 LLM 不支持调用")', llm_body)
 
     def test_post_result_parsing_prefers_failures_and_uses_strict_success_markers(self):
         source = _source()
