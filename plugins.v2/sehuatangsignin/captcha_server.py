@@ -933,7 +933,7 @@ def _is_cf_challenge_html(html: str) -> bool:
 def _parse_check_html(html: str) -> dict:
     if _is_cf_challenge_html(html):
         return {"code": 403, "message": "Cloudflare challenge returned", "data": "cf_challenge", "raw": html[:300]}
-    if "static/safe/js/web.js" in html or "enter-btn" in html or "safeid=" in html:
+    if _is_safe_gate_html(html):
         return {"code": 403, "message": "safe gate returned", "data": "safe_gate", "raw": html[:300]}
     m = re.search(r"<body>(.+?)</body>", html, re.S)
     if m:
@@ -957,6 +957,137 @@ def _merge_response_cookiejar(cookies: list, jar):
             "path": c.path or "/",
         })
     _merge_solution_cookies(cookies, returned)
+
+
+def _browser_context_kwargs(fs_sid: str) -> dict:
+    proxy = _proxy_url_cache.strip()
+    user_agent = _fs_user_agents.get(fs_sid)
+    context_kwargs = {
+        "locale": "zh-CN",
+        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+    }
+    if user_agent:
+        context_kwargs["user_agent"] = user_agent
+    if proxy:
+        context_kwargs["proxy"] = {"server": proxy}
+    return context_kwargs
+
+
+def _add_browser_cookies(context, cookies: list):
+    browser_cookies = [_playwright_cookie(c) for c in (cookies or [])]
+    browser_cookies = [c for c in browser_cookies if c]
+    if browser_cookies:
+        context.add_cookies(browser_cookies)
+
+
+def _is_safe_gate_html(html: str) -> bool:
+    if not html:
+        return False
+    lower = html.lower()
+    return any(marker in lower for marker in (
+        "static/safe/js/web.js",
+        "safeid=",
+        "enter-btn",
+        "请完成安全验证",
+        "安全检查",
+        "访问过于频繁",
+        "您没有权限",
+        "需要登录",
+    ))
+
+
+def _bounded_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _browser_wait(page, seconds: float):
+    if seconds <= 0:
+        return
+    try:
+        page.wait_for_timeout(int(seconds * 1000))
+    except Exception:
+        time.sleep(seconds)
+
+
+def _click_safe_gate_button(page) -> str:
+    try:
+        return page.evaluate(
+            """
+            () => {
+                const visible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style && style.visibility !== 'hidden' &&
+                        style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                };
+                const selectors = [
+                    '#enter-btn',
+                    '.enter-btn',
+                    'button.enter-btn',
+                    'a.enter-btn',
+                    'input.enter-btn',
+                    '[id="enter-btn"]',
+                    '[class~="enter-btn"]'
+                ];
+                for (const selector of selectors) {
+                    const el = document.querySelector(selector);
+                    if (el && visible(el)) {
+                        el.click();
+                        return selector;
+                    }
+                }
+                const labels = ['进入', '继续', '同意并进入', 'Enter', 'Continue'];
+                const candidates = Array.from(document.querySelectorAll(
+                    'button,a,input[type="button"],input[type="submit"]'
+                ));
+                for (const el of candidates) {
+                    const label = ((el.innerText || el.textContent || el.value || '') + '').trim();
+                    if (!label || !visible(el)) continue;
+                    if (labels.some((item) => label.includes(item))) {
+                        el.click();
+                        return label.slice(0, 40);
+                    }
+                }
+                return '';
+            }
+            """
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _settle_browser_gate(page, engine: str, wait_seconds: float | None = None):
+    settle = _bounded_float(
+        wait_seconds if wait_seconds is not None else os.environ.get("SEHUATANG_BROWSER_GET_GATE_SETTLE_SECONDS", "3"),
+        3.0,
+        0.0,
+        8.0,
+    )
+    try:
+        html = page.content()
+    except Exception:
+        html = ""
+    if _is_cf_challenge_html(html) or _is_safe_gate_html(html):
+        if settle:
+            logger.info(f"[SehuatangCaptcha] Browser GET {engine} saw gate page, wait {settle:.1f}s")
+            _browser_wait(page, settle)
+    try:
+        html = page.content()
+    except Exception:
+        html = ""
+    if _is_safe_gate_html(html):
+        clicked = _click_safe_gate_button(page)
+        if clicked:
+            logger.info(f"[SehuatangCaptcha] Browser GET {engine} clicked safe gate button: {clicked}")
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            _browser_wait(page, max(1.0, min(3.0, settle or 1.0)))
 
 
 def _close_browser_state(state: dict | None):
@@ -1067,18 +1198,131 @@ def _launch_playwright_browser():
         return None, None, f"playwright launch failed: {e}"
 
 
+def fs_browser_get(fs_sid: str, url: str, cookies: list, wait_seconds: float | None = None) -> dict:
+    """GET a page in a short-lived browser context and merge resulting cookies."""
+    proxy = _proxy_url_cache.strip()
+    context_kwargs = _browser_context_kwargs(fs_sid)
+    launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
+    last_error = "no browser engine available"
+    for engine, launcher in launchers:
+        browser = runner = context = None
+        try:
+            browser, runner, err = launcher()
+            if not browser:
+                last_error = err or last_error
+                logger.debug(f"[SehuatangCaptcha] Browser GET skip {engine}: {last_error}")
+                continue
+            try:
+                context = browser.new_context(**context_kwargs)
+            except TypeError as e:
+                if proxy:
+                    last_error = f"{engine} does not accept proxy context: {e}"
+                    logger.warning(f"[SehuatangCaptcha] Browser GET {last_error}")
+                    continue
+                raise
+            _add_browser_cookies(context, cookies)
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            _settle_browser_gate(page, engine, wait_seconds=wait_seconds)
+            html = page.content()
+            _merge_browser_cookies(cookies, context.cookies(url or BASE_URL))
+            return {
+                "html": html,
+                "text": html,
+                "status": response.status if response else None,
+                "url": page.url,
+                "via": engine,
+            }
+        except Exception as e:
+            last_error = f"{engine} browser get failed: {e}"
+            logger.warning(f"[SehuatangCaptcha] {last_error}")
+        finally:
+            _close_browser_state({"context": context, "browser": browser, "runner": runner})
+    return {"html": "", "text": "", "error": last_error, "via": "browser"}
+
+
+def fs_browser_get_text(fs_sid: str, url: str, cookies: list, wait_seconds: float | None = None) -> str:
+    """Return HTML from fs_browser_get, keeping tests free to stub this function."""
+    return fs_browser_get(fs_sid, url, cookies, wait_seconds=wait_seconds).get("html", "")
+
+
+def fs_browser_post(fs_sid: str, url: str, body: str, cookies: list,
+                    headers: dict | None = None, referer_url: str | None = None,
+                    wait_seconds: float | None = None) -> dict:
+    """POST from a short-lived same-origin browser context and merge resulting cookies."""
+    proxy = _proxy_url_cache.strip()
+    context_kwargs = _browser_context_kwargs(fs_sid)
+    launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
+    last_error = "no browser engine available"
+    safe_headers = {}
+    for key, value in (headers or {}).items():
+        header = str(key)
+        if header.lower() in {"accept", "content-type", "x-requested-with"} and value:
+            safe_headers[header] = str(value)
+    safe_headers.setdefault("Accept", "*/*")
+    safe_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    start_url = str(referer_url or (headers or {}).get("Referer") or BASE_URL)
+    if not start_url.startswith(BASE_URL):
+        start_url = BASE_URL
+    for engine, launcher in launchers:
+        browser = runner = context = None
+        try:
+            browser, runner, err = launcher()
+            if not browser:
+                last_error = err or last_error
+                logger.debug(f"[SehuatangCaptcha] Browser POST skip {engine}: {last_error}")
+                continue
+            try:
+                context = browser.new_context(**context_kwargs)
+            except TypeError as e:
+                if proxy:
+                    last_error = f"{engine} does not accept proxy context: {e}"
+                    logger.warning(f"[SehuatangCaptcha] Browser POST {last_error}")
+                    continue
+                raise
+            _add_browser_cookies(context, cookies)
+            page = context.new_page()
+            page.set_default_timeout(10000)
+            page.goto(start_url, wait_until="domcontentloaded", timeout=15000)
+            _settle_browser_gate(page, engine, wait_seconds=wait_seconds)
+            response = page.evaluate(
+                """
+                async ({ url, body, headers, referrer }) => {
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers,
+                        body,
+                        credentials: 'include',
+                        cache: 'no-store',
+                        referrer
+                    });
+                    return {status: resp.status, text: await resp.text(), url: resp.url};
+                }
+                """,
+                {"url": url, "body": body, "headers": safe_headers, "referrer": start_url},
+            )
+            _merge_browser_cookies(cookies, context.cookies(url or BASE_URL))
+            html = response.get("text") or ""
+            return {
+                "html": html,
+                "text": html,
+                "status": response.get("status"),
+                "url": response.get("url"),
+                "via": engine,
+            }
+        except Exception as e:
+            last_error = f"{engine} browser post failed: {e}"
+            logger.warning(f"[SehuatangCaptcha] {last_error}")
+        finally:
+            _close_browser_state({"context": context, "browser": browser, "runner": runner})
+    return {"html": "", "text": "", "error": last_error, "via": "browser"}
+
+
 def _browser_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict:
     """Submit captcha check from a short-lived browser origin before falling back to direct requests."""
     proxy = _proxy_url_cache.strip()
-    user_agent = _fs_user_agents.get(fs_sid)
-    context_kwargs = {
-        "locale": "zh-CN",
-        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
-    }
-    if user_agent:
-        context_kwargs["user_agent"] = user_agent
-    if proxy:
-        context_kwargs["proxy"] = {"server": proxy}
+    context_kwargs = _browser_context_kwargs(fs_sid)
 
     last_error = "no browser engine available"
     launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
@@ -1100,10 +1344,7 @@ def _browser_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict
                     continue
                 raise
 
-            browser_cookies = [_playwright_cookie(c) for c in (cookies or [])]
-            browser_cookies = [c for c in browser_cookies if c]
-            if browser_cookies:
-                context.add_cookies(browser_cookies)
+            _add_browser_cookies(context, cookies)
             page = context.new_page()
             page.set_default_timeout(10000)
             page.goto(f"{BASE_URL}/plugin.php?id=dd_sign", wait_until="domcontentloaded", timeout=12000)
@@ -1163,15 +1404,7 @@ def _create_browser_state(session_key: str, fs_sid: str, cookies: list) -> dict 
     """Create one live browser page for captcha fetch/check/sign_v2 of a relay session."""
     _prune_browser_sessions()
     proxy = _proxy_url_cache.strip()
-    user_agent = _fs_user_agents.get(fs_sid)
-    context_kwargs = {
-        "locale": "zh-CN",
-        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
-    }
-    if user_agent:
-        context_kwargs["user_agent"] = user_agent
-    if proxy:
-        context_kwargs["proxy"] = {"server": proxy}
+    context_kwargs = _browser_context_kwargs(fs_sid)
 
     launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
     last_error = "no browser engine available"
@@ -1192,10 +1425,7 @@ def _create_browser_state(session_key: str, fs_sid: str, cookies: list) -> dict 
                     _close_browser_state({"browser": browser, "runner": runner})
                     continue
                 raise
-            browser_cookies = [_playwright_cookie(c) for c in (cookies or [])]
-            browser_cookies = [c for c in browser_cookies if c]
-            if browser_cookies:
-                context.add_cookies(browser_cookies)
+            _add_browser_cookies(context, cookies)
             page = context.new_page()
             page.set_default_timeout(10000)
             page.goto(f"{BASE_URL}/plugin.php?id=dd_sign", wait_until="domcontentloaded", timeout=12000)

@@ -69,17 +69,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.1.1",
+        "version": "1.1.3",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.1.3": "修复 98 自动回帖浏览器主路径：版块页、详情页和提交回帖均优先使用浏览器上下文并合并 Cookie，浏览器空响应或不可用时才使用 FS 备用，且备用 GET 不重复限速；优化自动回帖润色，影视/视频/资源分享类帖子改用更自然且贴合标题/正文可见线索的轻口语短评，拦截模板套话、空泛库存短语及资源词；润色被本地校验拒绝时持续反馈原因并重写当前候选，直到生成合格回复或 AI 调用失败/超时。",
+            "v1.1.2": "修复自动回帖安全页/权限页处理：版块页和详情页优先通过浏览器上下文获取并合并 Cookie，浏览器空响应或不可用时才使用 FS GET 备用且不重复限速；提交回帖同样优先使用浏览器同源 POST，空响应或不可用时才用 FS request.post 备用；仍被拦截且无可用候选时按失败通知并列出 fid。",
             "v1.1.1": "完善自动回帖结果通知：区分成功、失败、跳过，AI 调用失败、FlareSolverr/POST/站点返回异常按失败通知，并补充 fid、tid、标题、回复摘要和尝试序号。",
             "v1.1.0": "新增独立自动回帖功能：按账号生成每日随机计划，从配置版块抓取候选帖，经硬规则和系统 LLM 低风险审核后才提交 Discuz 回帖；不耦合手动验证码签到流程。",
             "v1.0.18": "验证码页面新增滑块左右 1px、旋转左右 1° 微调按钮；仅复用现有答案渲染路径，不改验证码获取、校验、重试和签到流程。",
-            "v1.0.17": "验证码 fetch/check/sign_v2 优先复用同一个 CloakBrowser/Playwright 浏览器上下文，保留 direct requests 兜底；识别 Cloudflare challenge 并限制 unsupported captcha 刷新次数，降低 429 放大。",
-            "v1.0.16": "修正验证码失败重试次数配置：配置为 0 时不再被默认值覆盖，0 可明确表示不进行验证码失败后的额外重试轮次。",
-            "v1.0.15": "回退到 1.0.7 验证码主线，仅调整全局验证码获取锁等待时机：在发送验证码链接前先完成等待，避免用户打开验证码页面后才开始排队；FlareSolverr 地址改为要求填写完整 /v1 API 路径；不保留 browser/cloak check 等实验策略。"
+            "v1.0.17": "验证码 fetch/check/sign_v2 优先复用同一个 CloakBrowser/Playwright 浏览器上下文，保留 direct requests 兜底；识别 Cloudflare challenge 并限制 unsupported captcha 刷新次数，降低 429 放大。"
         }
     },
     "WeWorkIPCB": {

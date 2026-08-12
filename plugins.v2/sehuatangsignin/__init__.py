@@ -33,6 +33,8 @@ from .captcha_server import (
     complete_signin,
     destroy_session,
     fetch_captcha_for_account,
+    fs_browser_get_text,
+    fs_browser_post,
     fs_create_session,
     fs_destroy_session,
     fs_get,
@@ -58,7 +60,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -124,6 +126,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_min_interval_minutes = 10
     _auto_reply_max_attempts_per_day = 1
     _auto_reply_ai_timeout = 45
+    _auto_reply_polish_deadline_seconds = 360
 
     # Global lock for site captcha endpoint operations across all accounts.
     # It serializes both fetch and check calls to reduce site-wide 429 risk.
@@ -1096,11 +1099,21 @@ class SehuatangSignin(_PluginBase):
             all_candidates = []
             seen_tids = set()
             skipped_candidates = 0
+            blocked_forum_fids = []
             for fid in forum_ids:
                 forum_url = f"{self._base_url}/forum.php?mod=forumdisplay&fid={fid}"
-                html = self._auto_reply_paced_get(fs_sid, forum_url, cookies, request_state)
+                html = self._auto_reply_browser_primary_get(
+                    fs_sid,
+                    forum_url,
+                    cookies,
+                    request_state,
+                    account_id,
+                    f"版块 {fid}",
+                )
                 if self._is_auto_reply_blocked_page(html):
                     logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖版块 {fid} 被安全页/权限页拦截")
+                    if str(fid) not in blocked_forum_fids:
+                        blocked_forum_fids.append(str(fid))
                     continue
                 for candidate in self._extract_thread_candidates(html, fid, self._base_url):
                     tid = str(candidate.get("tid") or "")
@@ -1116,6 +1129,12 @@ class SehuatangSignin(_PluginBase):
 
             if not all_candidates:
                 message = "无可用候选帖"
+                if blocked_forum_fids:
+                    blocked_fids = ",".join(blocked_forum_fids)
+                    message = f"版块安全页/权限页拦截（blocked_fids={blocked_fids}），未获取到可用候选帖"
+                    if skipped_candidates:
+                        message = f"{message}，其他候选已跳过 {skipped_candidates} 个"
+                    return self._auto_reply_result("failed", message)
                 if skipped_candidates:
                     message = f"候选帖均不合适（已跳过 {skipped_candidates} 个）"
                 return self._auto_reply_result("skipped", message)
@@ -1125,7 +1144,14 @@ class SehuatangSignin(_PluginBase):
             for candidate in all_candidates:
                 tid = str(candidate.get("tid") or "")
                 detail_url = str(candidate.get("url") or "")
-                detail_html = self._auto_reply_paced_get(fs_sid, detail_url, cookies, request_state)
+                detail_html = self._auto_reply_browser_primary_get(
+                    fs_sid,
+                    detail_url,
+                    cookies,
+                    request_state,
+                    account_id,
+                    f"详情 {tid}",
+                )
                 detail = self._extract_auto_reply_thread_detail(detail_html, candidate, forum_ids)
                 ok, reason = self._hard_filter_auto_reply_candidate(
                     detail,
@@ -1209,13 +1235,43 @@ class SehuatangSignin(_PluginBase):
             if fs_sid:
                 fs_destroy_session(fs_sid)
 
-    def _auto_reply_paced_get(self, fs_sid: str, url: str, cookies: list, request_state: Dict[str, Any]) -> str:
+    def _auto_reply_pace_request(self, request_state: Dict[str, Any]):
         if request_state.get("requested"):
             delay = random.uniform(8, 12)
             logger.info(f"[SehuatangSignin] 自动回帖请求限速等待 {delay:.1f} 秒")
             time.sleep(delay)
         request_state["requested"] = True
+
+    def _auto_reply_paced_get(self, fs_sid: str, url: str, cookies: list, request_state: Dict[str, Any]) -> str:
+        self._auto_reply_pace_request(request_state)
         return fs_get(fs_sid, url, cookies)
+
+    def _auto_reply_browser_primary_get(self, fs_sid: str, url: str, cookies: list,
+                                        request_state: Dict[str, Any],
+                                        account_id: str = "", page_label: str = "") -> str:
+        label = page_label or "页面"
+        try:
+            self._auto_reply_pace_request(request_state)
+            html = fs_browser_get_text(fs_sid, url, cookies)
+        except Exception as e:
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器优先获取失败：{e}")
+        else:
+            if str(html or "").strip():
+                if self._is_auto_reply_blocked_page(html):
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器返回安全页/权限页")
+                else:
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过浏览器获取")
+                return html
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器未返回页面，改用 FS GET 备用")
+
+        html = fs_get(fs_sid, url, cookies)
+        if self._is_auto_reply_blocked_page(html):
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用后仍为安全页/权限页")
+        elif str(html or "").strip():
+            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过 FS GET 备用获取")
+        else:
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用未返回页面")
+        return html
 
     @staticmethod
     def _auto_reply_now() -> datetime:
@@ -1956,7 +2012,7 @@ class SehuatangSignin(_PluginBase):
         return "".join(ch for ch in normalized if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
     @classmethod
-    def _has_auto_reply_contact_or_diversion_text(text: str) -> bool:
+    def _has_auto_reply_contact_or_diversion_text(cls, text: str) -> bool:
         normalized = str(text or "")
         patterns = [
             r"\b(?:telegram|discord|whatsapp|line|twitter|x\.com|tg群?|群号|QQ群|微信群|微信|VX|私信|私聊|PM)\b",
@@ -2114,16 +2170,49 @@ class SehuatangSignin(_PluginBase):
         return validated
 
     def _polish_auto_reply_with_ai(self, detail: Dict[str, Any], assessment: Dict[str, Any]) -> Optional[str]:
-        prompt = self._build_auto_reply_polish_prompt(detail, assessment)
-        raw_response = self._call_auto_reply_llm_with_timeout(prompt, "润色")
-        if not raw_response:
-            return None
+        rejected_reply = ""
+        rejection_reason = ""
+        validation_failures = 0
+        started_at = time.monotonic()
+        try:
+            polish_deadline_seconds = max(
+                180,
+                int(self._auto_reply_polish_deadline_seconds or 360),
+            )
+        except (TypeError, ValueError):
+            polish_deadline_seconds = 360
 
-        reply = self._extract_auto_reply_reply(raw_response)
-        validated = self._validate_auto_reply_text(reply, detail)
-        if not validated:
-            logger.info("[SehuatangSignin] 自动回帖 AI 回复未通过本地校验")
-        return validated
+        # Keep asking the AI to repair the same candidate after local validation
+        # failures. Only AI/system errors or the generous wall-clock deadline stop
+        # polishing, so a good candidate is not discarded by a small attempt cap.
+        while True:
+            elapsed_seconds = time.monotonic() - started_at
+            if elapsed_seconds >= polish_deadline_seconds:
+                logger.info(
+                    f"[SehuatangSignin] 自动回帖 AI 回复润色超过 {polish_deadline_seconds} 秒仍未通过本地校验，"
+                    f"停止润色当前候选；本地校验失败次数={validation_failures}"
+                )
+                return None
+            prompt = self._build_auto_reply_polish_prompt(
+                detail,
+                assessment,
+                rejected_reply=rejected_reply,
+                rejection_reason=rejection_reason,
+            )
+            raw_response = self._call_auto_reply_llm_with_timeout(prompt, "润色")
+            reply = self._extract_auto_reply_reply(raw_response)
+            validated, reason = self._validate_auto_reply_text_with_reason(reply, detail)
+            if validated:
+                return validated
+
+            rejected_reply = reply
+            rejection_reason = reason or "回复格式不合规"
+            validation_failures += 1
+            logger.info(
+                f"[SehuatangSignin] 自动回帖 AI 回复第 {validation_failures} 次未通过本地校验："
+                f"{rejection_reason}；继续修正当前候选，不按次数上限跳过"
+            )
+        return None
 
     def _call_auto_reply_llm_with_timeout(self, prompt: str, stage_name: str) -> str:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -2232,19 +2321,45 @@ class SehuatangSignin(_PluginBase):
             f"首楼正文完整内容：{content or '-'}"
         )
 
-    def _build_auto_reply_polish_prompt(self, detail: Dict[str, Any], assessment: Dict[str, Any]) -> str:
+    def _build_auto_reply_polish_prompt(self, detail: Dict[str, Any], assessment: Dict[str, Any],
+                                        rejected_reply: str = "", rejection_reason: str = "") -> str:
         templates = self._parse_line_list(self._auto_reply_templates)
         custom_prompt = self._auto_reply_custom_prompt.strip()
         content = str(detail.get("content") or "")
         risk_reasons = assessment.get("risk_reasons") or []
+        rejected_reply = re.sub(r"\s+", " ", self._strip_html(str(rejected_reply or ""))).strip()
+        rejection_reason = re.sub(r"\s+", " ", str(rejection_reason or "")).strip()
+        retry_guidance = ""
+        if rejected_reply or rejection_reason:
+            retry_guidance = (
+                "上一轮被本地校验拒绝，请修正后重新生成，不要解释。\n"
+                f"被拒回复：{json.dumps(rejected_reply[:80] or '-', ensure_ascii=False)}\n"
+                f"拒绝原因：{rejection_reason[:80] or '未说明'}\n"
+                "本轮必须避开该问题，换一种自然短评，只输出新回复。\n"
+            )
         return (
             "你只负责为已通过低风险评估的论坛帖子生成一条回帖，不再做适合性判断。\n"
             "必须只输出最终要提交的纯文本回复，不要输出 JSON、字段名、引号、Markdown、解释或思考过程。\n"
             "回复要求：自然中文，像普通用户随手回复，低调短句，短优先，6-18 个中文字符最佳，最长 30 个字符。\n"
             "禁止 emoji、Markdown、URL、联系方式、AI/机器人/模型自称、道歉拒绝话术，不要重复标题或照抄标题。\n"
+            "电影/视频/影视/资源分享类帖子：优先写像刚看到标题/简介后的轻口语短评，语气松弛，不要像客服或模板。\n"
+            "这类回复可以轻轻贴合标题或正文透露出的氛围：简介是否清楚、题材/主题、画质/版本、演员/人物/主体、画风/风格；只根据已出现的信息，不编造剧情、演员、清晰度、评价。\n"
+            "明确不要写论坛套话：感谢分享、支持一下、路过看看、顶一下、楼主辛苦、辛苦了、前排支持。\n"
+            "不要在回复里出现 下载、链接、地址、资源 等索取或交付资源词。\n"
+            "不要复述片名、标题、番号或专名；需要贴合内容时，用泛化说法，不照搬原文名词。\n"
+            "所有回复必须只使用标题和首楼正文中的可见线索，不要引入帖子里没出现的信息。\n"
+            "不得编造剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验。\n"
+            "必须从标题/正文中挑一个可见线索再泛化成短评；没有对应线索就不要写该方向。\n"
+            "如果标题和正文内容太薄，选择中性、内容有依据的短句，例如标题信息挺直观、看介绍还算清楚，不要假装看过细节。\n"
+            "避免空洞泛泛的库存短语，即使未命中禁用词，也不要输出不错不错、看起来不错、可以可以、很棒、收藏了这类无可见依据的话。\n"
+            "影视/视频/资源分享帖的合格方向示例（只看方向，禁止逐字套用）：简介看着挺清楚 / 这个题材挺有意思 / 预览感觉还可以 / 画面风格挺顺眼 / 介绍写得蛮直观。\n"
+            "这些示例不是模板；请根据帖子已出现的信息换一种说法。\n"
+            "无效示例（绝对不要输出）：感谢分享 / 支持一下 / 路过看看 / 顶一下 / 楼主辛苦了 / 求个资源 / 有下载吗 / 看看链接 / 地址发下 / 磁力有吗 / 网盘在哪。\n"
+            "禁止出现的套话和资源词：感谢分享、谢谢分享、感谢楼主、支持一下、路过看看、顶一下、帮顶、前排支持、楼主辛苦、辛苦了、下载、链接、地址、资源、网盘、磁力、私发、发我、求资源。\n"
             "标点根据回复内容自然选择：可以不加句末标点，也可以用。！？~等少量常见标点或一个普通空格作停顿，但不要固定套用某一种。\n"
             "仍然要短、低调、不刷屏，不添加奇怪符号或颜文字。\n"
             "尽量避免直接照抄常见模板，参考模板只用于把握语气。\n"
+            f"{retry_guidance}"
             f"参考模板：{json.dumps(templates, ensure_ascii=False)}\n"
             f"补充要求：{custom_prompt or '无'}\n"
             f"低风险原因：{json.dumps(risk_reasons, ensure_ascii=False)}\n"
@@ -2342,6 +2457,11 @@ class SehuatangSignin(_PluginBase):
         }
 
     def _validate_auto_reply_text(self, reply_text: Any, detail: Dict[str, Any]) -> Optional[str]:
+        validated, _ = self._validate_auto_reply_text_with_reason(reply_text, detail)
+        return validated
+
+    def _validate_auto_reply_text_with_reason(self, reply_text: Any,
+                                              detail: Dict[str, Any]) -> Tuple[Optional[str], str]:
         reply = re.sub(r"(?is)<think>.*?</think>", "", str(reply_text or "")).strip()
         reply = self._strip_html(reply)
         reply = html_lib.unescape(reply).replace("\xa0", " ")
@@ -2349,36 +2469,60 @@ class SehuatangSignin(_PluginBase):
         reply = reply.strip(" \"'“”‘’`")
         lower_reply = reply.lower()
         if reply.count(" ") > 1:
-            return None
+            return None, "空格过多"
         if len(reply) < 2 or len(reply) > 30:
-            return None
+            return None, "回复长度必须为 2-30 个字符"
         if not re.search(r"[\u4e00-\u9fff]", reply):
-            return None
+            return None, "缺少中文内容"
         if re.search(r"[\U0001F000-\U0001FAFF\u2600-\u27BF]", reply):
-            return None
+            return None, "包含 emoji 或特殊符号"
         if re.search(r"[*_#>\[\]`]", reply):
-            return None
+            return None, "包含 Markdown 标记"
         if re.search(r"(?:https?://|www\.|[a-z0-9][a-z0-9.-]{1,}\.(?:com|net|org|cn|cc|tv|me|io|xyz)\b)", lower_reply):
-            return None
+            return None, "包含 URL 或域名"
         blocked_fragments = [
             "<think", "</think", "```", "{", "}", "我是ai", "作为ai", "作为一个ai",
             "ai助手", "语言模型", "机器人", "抱歉", "无法回复", "不能回复",
             "http://", "https://", "www.", "telegram", "tg", "qq", "微信", "群号",
-            "下载", "链接", "地址", "网盘", "磁力", "私发", "发我", "求资源",
+            "下载", "链接", "地址", "资源", "网盘", "磁力", "私发", "发我", "求资源",
         ]
-        if any(fragment in lower_reply for fragment in blocked_fragments):
-            return None
+        for fragment in blocked_fragments:
+            if fragment in lower_reply:
+                return None, f"包含禁用词：{fragment[:20]}"
+        compact_reply = re.sub(r"[\s，,。.!！?？~～、]+", "", reply).lower()
+        stock_reply_fragments = [
+            "感谢分享", "谢谢分享", "感谢楼主", "支持一下", "路过看看", "顶一下",
+            "帮顶", "前排支持", "楼主辛苦", "辛苦了", "不错支持",
+            "内容不错", "不错不错", "看起来不错", "可以可以", "很棒",
+            "好东西", "收藏了", "收藏一下", "马克一下", "学习了",
+        ]
+        for fragment in stock_reply_fragments:
+            if fragment in compact_reply:
+                return None, f"命中论坛套话：{fragment}"
         if self._has_auto_reply_contact_or_diversion_text(reply):
-            return None
+            return None, "包含联系方式或引流内容"
         title = re.sub(r"\s+", "", self._strip_html(str(detail.get("title") or "")))
         if title and (reply == title or title in reply or (len(reply) >= 6 and reply in title)):
-            return None
+            return None, "重复标题或照抄标题"
+        title_for_repeat_check = unicodedata.normalize("NFKC", title)
+        for marker in [
+            "影视资源分享", "电影资源分享", "视频资源分享", "影片资源分享",
+            "资源分享", "影视分享", "电影分享", "视频分享", "影片分享",
+        ]:
+            if marker not in title_for_repeat_check:
+                continue
+            title_prefix = title_for_repeat_check.split(marker, 1)[0]
+            title_prefix = re.sub(r"^(?:[\[【(（][^\]】)）]{1,30}[\]】)）])+", "", title_prefix)
+            title_prefix = title_prefix.strip(" -_·.。,，:：|/\\[]【】()（）")
+            if len(title_prefix) >= 2 and title_prefix in reply:
+                return None, f"重复标题片名或专名：{title_prefix[:20]}"
+            break
         reply_norm = reply.rstrip("。.!！")
         for template in self._parse_line_list(self._auto_reply_templates):
             template_norm = re.sub(r"\s+", "", self._strip_html(template)).strip(" \"'“”‘’`").rstrip("。.!！")
             if reply_norm and reply_norm == template_norm:
-                return None
-        return reply
+                return None, "照抄参考模板"
+        return reply, ""
 
     def _submit_auto_reply(self, fs_sid: str, cookies: list, detail: Dict[str, Any], reply: str) -> Dict[str, Any]:
         fid = str(detail.get("fid") or "")
@@ -2402,6 +2546,23 @@ class SehuatangSignin(_PluginBase):
             "Referer": str(detail.get("url") or f"{self._base_url}/forum.php?mod=viewthread&tid={tid}"),
             "Origin": self._base_url,
         }
+        response: Dict[str, Any] = {}
+        try:
+            response = fs_browser_post(
+                fs_sid,
+                post_url,
+                post_data,
+                cookies,
+                headers=headers,
+                referer_url=headers["Referer"],
+            )
+        except Exception as e:
+            logger.warning(f"[SehuatangSignin] 自动回帖浏览器 POST 失败，改用 FS request.post 备用：{e}")
+        else:
+            if str((response or {}).get("html") or "").strip():
+                logger.info(f"[SehuatangSignin] 自动回帖已通过浏览器 POST 提交，via={response.get('via') or 'browser'}")
+                return self._parse_auto_reply_post_result(response.get("html", ""))
+            logger.warning("[SehuatangSignin] 自动回帖浏览器 POST 未返回页面，改用 FS request.post 备用")
         try:
             response = self._fs_post(fs_sid, post_url, post_data, cookies, headers=headers)
         except Exception as e:

@@ -1,10 +1,18 @@
 import ast
+import importlib.util
+import json
+import sys
+import threading
+import types
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_INIT = ROOT / "plugins.v2" / "sehuatangsignin" / "__init__.py"
+PACKAGE_JSON = ROOT / "package.v2.json"
 
 
 def _source() -> str:
@@ -51,10 +59,145 @@ def _if_guard_for_name(method_node: ast.FunctionDef, name: str) -> ast.If:
     raise AssertionError(f"if not {name} guard not found")
 
 
+def _load_plugin_module_with_stubs() -> types.ModuleType:
+    module_name = "_sehuatangsignin_test_plugin"
+
+    class DummyLogger:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+        def error(self, *args, **kwargs):
+            pass
+
+    class DummyEventManager:
+        def register(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class DummyPluginBase:
+        def __init__(self):
+            self.messages = []
+
+        def get_data(self, *args, **kwargs):
+            return None
+
+        def save_data(self, *args, **kwargs):
+            pass
+
+        def post_message(self, **kwargs):
+            self.messages.append(kwargs)
+
+        def get_data_path(self):
+            return ROOT
+
+    class DummyScheduler:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_job(self, *args, **kwargs):
+            pass
+
+        def get_jobs(self):
+            return []
+
+        def remove_job(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class DummyCronTrigger:
+        @classmethod
+        def from_crontab(cls, *args, **kwargs):
+            return cls()
+
+    def noop(*args, **kwargs):
+        return None
+
+    app_core_config = types.ModuleType("app.core.config")
+    app_core_config.settings = types.SimpleNamespace(TZ="UTC", VERSION_FLAG="v2")
+    app_core_event = types.ModuleType("app.core.event")
+    app_core_event.eventmanager = DummyEventManager()
+    app_core_event.Event = type("Event", (), {})
+    app_log = types.ModuleType("app.log")
+    app_log.logger = DummyLogger()
+    app_plugins = types.ModuleType("app.plugins")
+    app_plugins._PluginBase = DummyPluginBase
+    app_schemas = types.ModuleType("app.schemas")
+    app_schemas.NotificationType = types.SimpleNamespace(Plugin="Plugin")
+    app_schemas_types = types.ModuleType("app.schemas.types")
+    app_schemas_types.EventType = types.SimpleNamespace(PluginAction="PluginAction")
+    apscheduler_background = types.ModuleType("apscheduler.schedulers.background")
+    apscheduler_background.BackgroundScheduler = DummyScheduler
+    apscheduler_cron = types.ModuleType("apscheduler.triggers.cron")
+    apscheduler_cron.CronTrigger = DummyCronTrigger
+    requests_module = types.ModuleType("requests")
+    requests_module.RequestException = Exception
+    requests_module.post = noop
+    captcha_server = types.ModuleType(f"{module_name}.captcha_server")
+    for name in [
+        "check_sign_status", "complete_signin", "destroy_session", "fetch_captcha_for_account",
+        "get_answer", "get_solved_at", "init_session", "is_expired", "is_requested", "is_solved",
+        "set_captcha_data", "set_base_url", "set_fs_url", "set_proxy_url", "set_session_store_path",
+        "start_server", "stop_server", "submit_check",
+    ]:
+        setattr(captcha_server, name, noop)
+    captcha_server.fs_create_session = lambda: "fs-test"
+    captcha_server.fs_destroy_session = noop
+    captcha_server.fs_browser_get_text = lambda *args, **kwargs: ""
+    captcha_server.fs_browser_post = lambda *args, **kwargs: {"html": ""}
+    captcha_server.fs_get = lambda *args, **kwargs: ""
+    captcha_server.site_captcha_lock = threading.Lock()
+
+    stubs = {
+        "app": types.ModuleType("app"),
+        "app.core": types.ModuleType("app.core"),
+        "app.core.config": app_core_config,
+        "app.core.event": app_core_event,
+        "app.log": app_log,
+        "app.plugins": app_plugins,
+        "app.schemas": app_schemas,
+        "app.schemas.types": app_schemas_types,
+        "apscheduler": types.ModuleType("apscheduler"),
+        "apscheduler.schedulers": types.ModuleType("apscheduler.schedulers"),
+        "apscheduler.schedulers.background": apscheduler_background,
+        "apscheduler.triggers": types.ModuleType("apscheduler.triggers"),
+        "apscheduler.triggers.cron": apscheduler_cron,
+        "requests": requests_module,
+        f"{module_name}.captcha_server": captcha_server,
+    }
+
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        PLUGIN_INIT,
+        submodule_search_locations=[str(PLUGIN_INIT.parent)],
+    )
+    if not spec or not spec.loader:
+        raise AssertionError("failed to build plugin import spec")
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, stubs):
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_plugin_version_is_current(self):
         source = _source()
-        self.assertIn('plugin_version = "1.1.1"', source)
+        package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
+        sehuatang = package["SehuatangSignin"]
+
+        self.assertIn('plugin_version = "1.1.3"', source)
+        self.assertEqual(sehuatang["version"], "1.1.3")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.3"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -129,6 +272,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             "_extract_auto_reply_reply",
             "_validate_auto_reply_assessment",
             "_validate_auto_reply_text",
+            "_validate_auto_reply_text_with_reason",
             "_extract_auto_reply_thread_detail",
             "_mark_auto_reply_success_for_day",
         ]:
@@ -155,6 +299,245 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("reverse=True", sort_body)
         self.assertIn("time_context = context.replace(match.group(0), \" \")", extract_body)
         self.assertIn("_extract_auto_reply_time_metadata(time_context)", extract_body)
+
+    def test_forum_and_detail_pages_use_browser_primary_without_initial_fs_get_on_success(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_max_thread_age_days = 0
+        forum_html = '<a href="forum.php?mod=viewthread&tid=888">普通分享帖</a>'
+        detail_html = "<html>detail</html>"
+        browser_calls = []
+        fs_get_calls = []
+        submit_saw_browser_cookie = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            browser_calls.append(url)
+            if "forumdisplay" in url:
+                cookies.append({"name": "gate_passed", "value": "1", "domain": ".sehuatang.net", "path": "/"})
+                return forum_html
+            return detail_html
+
+        def fake_fs_get(fs_sid, url, cookies, *args, **kwargs):
+            fs_get_calls.append(url)
+            return ""
+
+        def fake_detail(html_text, candidate, allowed_forum_ids):
+            self.assertEqual(html_text, detail_html)
+            detail = dict(candidate)
+            detail.update({
+                "content": "普通内容",
+                "author": "user",
+                "thread_subject_found": True,
+                "content_found": True,
+                "formhash": "abcdef12",
+                "can_reply": True,
+                "blocked_page": False,
+                "post_authors": [],
+                "post_author_refs": [],
+                "account_identity": {},
+            })
+            return detail
+
+        def fake_submit(fs_sid, cookies, detail, reply):
+            submit_saw_browser_cookie.append(any(c.get("name") == "gate_passed" for c in cookies))
+            return plugin._auto_reply_result("success", "回帖成功")
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", side_effect=fake_fs_get), \
+                patch.object(plugin_module.random, "uniform", return_value=8), \
+                patch.object(plugin_module.time, "sleep"), \
+                patch.object(plugin, "_extract_auto_reply_thread_detail", side_effect=fake_detail), \
+                patch.object(plugin, "_assess_auto_reply_with_ai", return_value={"risk_reasons": []}), \
+                patch.object(plugin, "_polish_auto_reply_with_ai", return_value="感谢分享"), \
+                patch.object(plugin, "_preflight_auto_reply_submit", return_value=(True, "")), \
+                patch.object(plugin, "_submit_auto_reply", side_effect=fake_submit):
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141"])
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(
+            browser_calls,
+            [
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
+                f"{plugin._base_url}/forum.php?mod=viewthread&tid=888",
+            ],
+        )
+        self.assertEqual(fs_get_calls, [])
+        self.assertEqual(submit_saw_browser_cookie, [True])
+
+    def test_blocked_forum_pages_fail_after_browser_primary_when_no_usable_candidates_remain(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        browser_calls = []
+        fs_get_calls = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            browser_calls.append(url)
+            return "<html>请完成安全验证 safeid=still-blocked</html>"
+
+        def fake_fs_get(fs_sid, url, cookies, *args, **kwargs):
+            fs_get_calls.append(url)
+            return ""
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", side_effect=fake_fs_get), \
+                patch.object(plugin_module.random, "uniform", return_value=8), \
+                patch.object(plugin_module.time, "sleep"):
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141", "166"])
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["failed"])
+        self.assertFalse(result["skipped"])
+        self.assertIn("安全页/权限页", result["reason"])
+        self.assertIn("141,166", result["reason"])
+        self.assertEqual(
+            browser_calls,
+            [
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=166",
+            ],
+        )
+        self.assertEqual(fs_get_calls, [])
+        self.assertEqual(plugin._auto_reply_status_label(result), "失败")
+        plugin._notify_auto_reply_result("account-a", result)
+        self.assertEqual(plugin.messages[-1]["title"], "98自动回帖失败")
+
+    def test_empty_browser_forum_page_uses_fs_get_backup_and_preserves_blocked_fids_when_backup_blocked(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        fetch_events = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            fetch_events.append(("browser", url))
+            return ""
+
+        def fake_fs_get(fs_sid, url, cookies, *args, **kwargs):
+            fetch_events.append(("fs_get", url))
+            return "<html>请完成安全验证 safeid=backup-blocked</html>"
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", side_effect=fake_fs_get), \
+                patch.object(plugin_module.random, "uniform", return_value=8) as uniform_mock, \
+                patch.object(plugin_module.time, "sleep") as sleep_mock:
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141"])
+
+        forum_url = f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141"
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("blocked_fids=141", result["reason"])
+        self.assertEqual(fetch_events, [("browser", forum_url), ("fs_get", forum_url)])
+        uniform_mock.assert_not_called()
+        sleep_mock.assert_not_called()
+
+    def test_blocked_forum_pages_do_not_fail_when_other_forums_have_candidates(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_max_thread_age_days = 0
+        responses = {
+            "fid=141": "<html>请完成安全验证 safeid=abc</html>",
+            "fid=166": '<a href="forum.php?mod=viewthread&tid=888">普通分享帖</a>',
+        }
+        fs_get_calls = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            return next((value for key, value in responses.items() if key in url), "<html>detail</html>")
+
+        def fake_fs_get(fs_sid, url, cookies, *args, **kwargs):
+            fs_get_calls.append(url)
+            return ""
+
+        def fake_detail(html_text, candidate, allowed_forum_ids):
+            detail = dict(candidate)
+            detail.update({
+                "content": "普通内容",
+                "author": "user",
+                "thread_subject_found": True,
+                "content_found": True,
+                "formhash": "abcdef12",
+                "can_reply": True,
+                "blocked_page": False,
+                "post_authors": [],
+                "post_author_refs": [],
+                "account_identity": {},
+            })
+            return detail
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", side_effect=fake_fs_get), \
+                patch.object(plugin_module.random, "uniform", return_value=8), \
+                patch.object(plugin_module.time, "sleep"), \
+                patch.object(plugin, "_extract_auto_reply_thread_detail", side_effect=fake_detail), \
+                patch.object(plugin, "_assess_auto_reply_with_ai", return_value=None):
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141", "166"])
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn("AI 评估未通过", result["reason"])
+        self.assertNotIn("安全页/权限页", result["reason"])
+        self.assertEqual(fs_get_calls, [])
+
+    def test_detail_page_uses_browser_primary_before_hard_filtering(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_max_thread_age_days = 0
+        forum_html = '<a href="forum.php?mod=viewthread&tid=321">普通分享帖</a>'
+        normal_detail_html = "<html><div id='thread_subject'>普通分享帖</div><td id='postmessage_1'>普通内容</td></html>"
+        events = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            events.append(("browser", url))
+            if "forumdisplay" in url:
+                return forum_html
+            return normal_detail_html
+
+        def fake_fs_get(fs_sid, url, cookies, *args, **kwargs):
+            events.append(("fs_get", url))
+            return ""
+
+        def fake_detail(html_text, candidate, allowed_forum_ids):
+            events.append(("extract", html_text))
+            detail = dict(candidate)
+            detail.update({
+                "content": "普通内容",
+                "author": "user",
+                "thread_subject_found": True,
+                "content_found": True,
+                "formhash": "abcdef12",
+                "can_reply": True,
+                "blocked_page": False,
+                "post_authors": [],
+                "post_author_refs": [],
+                "account_identity": {},
+            })
+            return detail
+
+        def fake_hard_filter(item, allowed_forum_ids, account_id="", require_detail=False):
+            events.append(("hard_detail" if require_detail else "hard_candidate", str(item.get("tid") or "")))
+            return True, ""
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", side_effect=fake_fs_get), \
+                patch.object(plugin_module.random, "uniform", return_value=8), \
+                patch.object(plugin_module.time, "sleep"), \
+                patch.object(plugin, "_extract_auto_reply_thread_detail", side_effect=fake_detail), \
+                patch.object(plugin, "_hard_filter_auto_reply_candidate", side_effect=fake_hard_filter), \
+                patch.object(plugin, "_assess_auto_reply_with_ai", return_value=None):
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141"])
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertIn(("browser", f"{plugin._base_url}/forum.php?mod=viewthread&tid=321"), events)
+        self.assertNotIn(("fs_get", f"{plugin._base_url}/forum.php?mod=viewthread&tid=321"), events)
+        self.assertIn(("extract", normal_detail_html), events)
+        self.assertLess(events.index(("hard_candidate", "321")), events.index(("browser", f"{plugin._base_url}/forum.php?mod=viewthread&tid=321")))
+        self.assertLess(events.index(("browser", f"{plugin._base_url}/forum.php?mod=viewthread&tid=321")), events.index(("extract", normal_detail_html)))
+        self.assertLess(events.index(("extract", normal_detail_html)), events.index(("hard_detail", "321")))
 
     def test_auto_reply_max_attempts_are_per_account_retries_until_success(self):
         source = _source()
@@ -451,7 +834,10 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         source = _source()
         polish_body = _method_source(source, "_build_auto_reply_polish_prompt")
         parser_body = _method_source(source, "_extract_auto_reply_reply")
-        validator_body = _method_source(source, "_validate_auto_reply_text")
+        validator_body = "\n".join([
+            _method_source(source, "_validate_auto_reply_text"),
+            _method_source(source, "_validate_auto_reply_text_with_reason"),
+        ])
 
         self.assertIn('content = str(detail.get("content") or "")', polish_body)
         self.assertNotIn('[:800]', polish_body)
@@ -473,18 +859,176 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("短、低调、不刷屏", polish_body)
         self.assertIn("不添加奇怪符号或颜文字", polish_body)
         self.assertIn("不要重复标题", polish_body)
+        for policy in [
+            "电影/视频/影视/资源分享类帖子",
+            "轻口语短评",
+            "语气松弛",
+            "不要像客服或模板",
+            "简介是否清楚、题材/主题、画质/版本、演员/人物/主体、画风/风格",
+            "只根据已出现的信息",
+            "不编造剧情、演员、清晰度、评价",
+            "所有回复必须只使用标题和首楼正文中的可见线索",
+            "不要引入帖子里没出现的信息",
+            "不得编造剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验",
+            "必须从标题/正文中挑一个可见线索再泛化成短评",
+            "没有对应线索就不要写该方向",
+            "如果标题和正文内容太薄",
+            "选择中性、内容有依据的短句",
+            "不要假装看过细节",
+            "避免空洞泛泛的库存短语",
+            "即使未命中禁用词",
+            "不错不错、看起来不错、可以可以、很棒、收藏了",
+            "明确不要写论坛套话",
+            "感谢分享、支持一下、路过看看、顶一下、楼主辛苦、辛苦了、前排支持",
+            "不要在回复里出现 下载、链接、地址、资源",
+            "不要复述片名、标题、番号或专名",
+            "用泛化说法，不照搬原文名词",
+            "合格方向示例",
+            "禁止逐字套用",
+            "简介看着挺清楚",
+            "这个题材挺有意思",
+            "预览感觉还可以",
+            "这些示例不是模板",
+            "无效示例",
+            "求个资源",
+            "有下载吗",
+            "看看链接",
+            "磁力有吗",
+            "禁止出现的套话和资源词",
+            "上一轮被本地校验拒绝",
+            "被拒回复",
+            "拒绝原因",
+        ]:
+            self.assertIn(policy, polish_body)
         self.assertIn('data.get("reply")', parser_body)
         self.assertIn("lines[0] if lines else text", parser_body)
         self.assertIn('re.sub(r"\\s+", " ", reply)', validator_body)
         self.assertIn('reply.count(" ") > 1', validator_body)
         self.assertIn("_has_auto_reply_contact_or_diversion_text(reply)", validator_body)
-        for fragment in ["下载", "链接", "地址", "网盘", "磁力", "私发", "求资源"]:
+        for fragment in ["下载", "链接", "地址", "资源", "网盘", "磁力", "私发", "求资源"]:
             self.assertIn(f'"{fragment}"', validator_body)
+        for fragment in ["感谢分享", "支持一下", "路过看看", "顶一下", "楼主辛苦", "辛苦了"]:
+            self.assertIn(f'"{fragment}"', validator_body)
+        for fragment in ["内容不错", "不错不错", "看起来不错", "可以可以", "很棒", "收藏了"]:
+            self.assertIn(f'"{fragment}"', validator_body)
+        self.assertIn("compact_reply", validator_body)
+        self.assertIn("title_for_repeat_check", validator_body)
+        self.assertIn("影视资源分享", validator_body)
         self.assertIn("len(reply) < 2 or len(reply) > 30", validator_body)
         self.assertNotIn("len(reply) > 80", validator_body)
         self.assertIn("self._parse_line_list(self._auto_reply_templates)", validator_body)
         self.assertIn("title in reply", validator_body)
         self.assertIn("https?://", validator_body)
+
+    def test_auto_reply_polish_retries_after_rejected_first_reply_and_returns_valid_second_reply(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail = {
+            "fid": "141",
+            "title": "某某影视资源分享",
+            "author": "alice",
+            "content": "简介写得比较清楚，附带预览图。",
+        }
+        prompts = []
+
+        def fake_llm(prompt, stage_name):
+            prompts.append(prompt)
+            return ["感谢分享", "简介看着挺清楚"][len(prompts) - 1]
+
+        with patch.object(plugin, "_call_auto_reply_llm_with_timeout", side_effect=fake_llm):
+            reply = plugin._polish_auto_reply_with_ai(detail, {"risk_reasons": []})
+
+        self.assertEqual(reply, "简介看着挺清楚")
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn("上一轮被本地校验拒绝", prompts[0])
+        self.assertIn("上一轮被本地校验拒绝", prompts[1])
+        self.assertIn("被拒回复：\"感谢分享\"", prompts[1])
+        self.assertIn("拒绝原因：命中论坛套话：感谢分享", prompts[1])
+
+    def test_auto_reply_polish_keeps_retrying_same_candidate_until_valid_reply(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail = {
+            "fid": "141",
+            "title": "某某影视资源分享",
+            "content": "简介写得比较清楚，附带预览图。",
+        }
+        prompts = []
+        replies = ["感谢分享", "求个资源", "支持一下", "内容不错", "看起来不错", "预览感觉还可以"]
+
+        def fake_llm(prompt, stage_name):
+            prompts.append(prompt)
+            return replies[len(prompts) - 1]
+
+        with patch.object(plugin, "_call_auto_reply_llm_with_timeout", side_effect=fake_llm):
+            reply = plugin._polish_auto_reply_with_ai(detail, {"risk_reasons": []})
+
+        self.assertEqual(reply, "预览感觉还可以")
+        self.assertEqual(len(prompts), 6)
+        self.assertIn("拒绝原因：命中论坛套话：感谢分享", prompts[1])
+        self.assertIn("被拒回复：\"求个资源\"", prompts[2])
+        self.assertIn("拒绝原因：包含禁用词：资源", prompts[2])
+        self.assertIn("被拒回复：\"看起来不错\"", prompts[5])
+        self.assertIn("继续修正当前候选", _method_source(_source(), "_polish_auto_reply_with_ai"))
+        self.assertNotIn("max_attempts = 3", _method_source(_source(), "_polish_auto_reply_with_ai"))
+
+    def test_auto_reply_polish_propagates_ai_errors_instead_of_looping_forever(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail = {"title": "某某影视资源分享", "content": "简介写得比较清楚。"}
+
+        with patch.object(plugin, "_call_auto_reply_llm_with_timeout", side_effect=RuntimeError("AI调用失败：润色调用超时")):
+            with self.assertRaisesRegex(RuntimeError, "AI调用失败"):
+                plugin._polish_auto_reply_with_ai(detail, {"risk_reasons": []})
+
+    def test_auto_reply_polish_deadline_stops_invalid_reply_repair_loop(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_polish_deadline_seconds = 180
+        detail = {"title": "某某影视资源分享", "content": "简介写得比较清楚。"}
+        calls = []
+
+        def fake_llm(prompt, stage_name):
+            calls.append((prompt, stage_name))
+            return "感谢分享"
+
+        with patch.object(plugin_module.time, "monotonic", side_effect=[0.0, 0.0, 181.0]), \
+                patch.object(plugin, "_call_auto_reply_llm_with_timeout", side_effect=fake_llm):
+            reply = plugin._polish_auto_reply_with_ai(detail, {"risk_reasons": []})
+
+        self.assertIsNone(reply)
+        self.assertEqual(len(calls), 1)
+
+    def test_validator_rejects_stock_resource_terms_and_share_title_repetition(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail = {
+            "title": "某某影视资源分享",
+            "content": "简介写得比较清楚，附带预览图。",
+        }
+
+        for reply in [
+            "感谢分享",
+            "感谢 分享。",
+            "支持一下",
+            "路过看看",
+            "顶一下",
+            "楼主辛苦了",
+            "求个资源",
+            "有下载吗",
+            "看看链接",
+            "这个地址稳吗",
+            "某某看起来不错",
+            "内容不错",
+            "不错不错",
+            "可以可以",
+            "很棒",
+            "收藏了",
+        ]:
+            self.assertIsNone(plugin._validate_auto_reply_text(reply, detail), reply)
+
+        for reply in ["简介看着挺清楚", "这个题材挺有意思", "预览感觉还可以"]:
+            self.assertEqual(plugin._validate_auto_reply_text(reply, detail), reply)
 
     def test_auto_reply_locks_duplicate_runs_and_treats_any_replied_tid_as_seen(self):
         source = _source()
@@ -572,6 +1116,11 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn('"done" if result_status == "success" else result_status', run_body)
 
         self.assertIn('self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")', auto_body)
+        self.assertIn("blocked_forum_fids = []", auto_body)
+        self.assertIn("blocked_forum_fids.append(str(fid))", auto_body)
+        self.assertIn('self._auto_reply_result("failed", message)', auto_body)
+        self.assertIn("安全页/权限页", auto_body)
+        self.assertIn("blocked_fids", auto_body)
         self.assertIn('self._auto_reply_result("skipped", message)', auto_body)
         self.assertIn('self._auto_reply_result("skipped", last_skip_message)', auto_body)
         self.assertIn('self._auto_reply_result("failed", f"异常：{str(e)}")', auto_body)
@@ -601,6 +1150,60 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("failure_markers", parse_body)
         self.assertLess(parse_body.index("for marker in failure_markers"), parse_body.index("for marker in success_markers"))
 
+    def test_auto_reply_submit_uses_browser_post_primary_without_fs_post_on_success(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail_url = f"{plugin._base_url}/forum.php?mod=viewthread&tid=321"
+        detail = {"fid": "141", "tid": "321", "formhash": "abcdef12", "url": detail_url}
+        browser_calls = []
+
+        def fake_browser_post(fs_sid, url, body, cookies, headers=None, referer_url=None, **kwargs):
+            browser_calls.append((fs_sid, url, body, cookies, headers, referer_url))
+            return {"html": "<script>post_reply_succeed</script>", "status": 200, "via": "playwright"}
+
+        with patch.object(plugin_module, "fs_browser_post", side_effect=fake_browser_post), \
+                patch.object(plugin, "_fs_post") as fs_post_mock:
+            result = plugin._submit_auto_reply("fs-test", [{"name": "a", "value": "b"}], detail, "感谢分享")
+
+        self.assertEqual(result["status"], "success")
+        fs_post_mock.assert_not_called()
+        self.assertEqual(len(browser_calls), 1)
+        _, post_url, post_body, _, headers, referer_url = browser_calls[0]
+        self.assertIn("replysubmit=yes", post_url)
+        self.assertEqual(referer_url, detail_url)
+        self.assertEqual(headers["Referer"], detail_url)
+        parsed_body = parse_qs(post_body)
+        self.assertEqual(parsed_body["formhash"], ["abcdef12"])
+        self.assertEqual(parsed_body["message"], ["感谢分享"])
+
+    def test_empty_browser_submit_falls_back_to_fs_post(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        detail = {
+            "fid": "141",
+            "tid": "321",
+            "formhash": "abcdef12",
+            "url": f"{plugin._base_url}/forum.php?mod=viewthread&tid=321",
+        }
+        browser_calls = []
+        fs_calls = []
+
+        def fake_browser_post(fs_sid, url, body, cookies, headers=None, referer_url=None, **kwargs):
+            browser_calls.append(url)
+            return {"html": "", "status": 599, "via": "browser"}
+
+        def fake_fs_post(fs_sid, url, body, cookies, headers=None):
+            fs_calls.append(url)
+            return {"html": "<script>succeedhandle_fastpost()</script>", "status": 200}
+
+        with patch.object(plugin_module, "fs_browser_post", side_effect=fake_browser_post), \
+                patch.object(plugin, "_fs_post", side_effect=fake_fs_post):
+            result = plugin._submit_auto_reply("fs-test", [{"name": "a", "value": "b"}], detail, "感谢分享")
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(len(browser_calls), 1)
+        self.assertEqual(fs_calls, browser_calls)
+
     def test_flaresolverr_is_required_without_misleading_toggle(self):
         source = _source()
         init_body = _method_source(source, "init_plugin")
@@ -619,11 +1222,12 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("_validate_auto_reply_text(reply, detail)", preflight_body)
         self.assertIn("回复文本提交前校验失败", preflight_body)
 
-    def test_reply_post_is_isolated_flaresolverr_request_post_without_retry(self):
+    def test_reply_post_is_browser_primary_with_flaresolverr_request_post_backup_without_retry(self):
         source = _source()
         fs_post_body = _method_source(source, "_fs_post")
         submit_body = _method_source(source, "_submit_auto_reply")
 
+        self.assertIn("fs_browser_post(", submit_body)
         self.assertIn('"cmd": "request.post"', fs_post_body)
         self.assertIn("requests.post(", fs_post_body)
         self.assertIn("replysubmit=yes", submit_body)
@@ -632,6 +1236,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertNotIn("while ", submit_body)
         self.assertNotIn("retry", submit_body.lower())
         self.assertNotIn("fs_get(", submit_body)
+        self.assertLess(submit_body.index("fs_browser_post("), submit_body.index("self._fs_post("))
 
     def test_scheduler_keeps_signin_and_auto_reply_onlyonce_separate(self):
         source = _source()
