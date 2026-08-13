@@ -199,9 +199,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.4"', source)
-        self.assertEqual(sehuatang["version"], "1.1.4")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.4"])
+        self.assertIn('plugin_version = "1.1.5"', source)
+        self.assertEqual(sehuatang["version"], "1.1.5")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.5"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -304,7 +304,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("time_context = context.replace(match.group(0), \" \")", extract_body)
         self.assertIn("_extract_auto_reply_time_metadata(time_context)", extract_body)
 
-    def test_forum_and_detail_pages_use_browser_primary_without_initial_fs_get_on_success(self):
+    def test_forum_and_detail_pages_use_browser_primary_after_fs_warmup_on_success(self):
         plugin_module = _load_plugin_module_with_stubs()
         plugin = plugin_module.SehuatangSignin()
         plugin._auto_reply_max_thread_age_days = 0
@@ -367,7 +367,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
                 f"{plugin._base_url}/forum.php?mod=viewthread&tid=888",
             ],
         )
-        self.assertEqual(fs_get_calls, [])
+        self.assertEqual(fs_get_calls, [f"{plugin._base_url}/plugin.php?id=dd_sign"])
         self.assertEqual(submit_saw_browser_cookie, [True])
 
     def test_blocked_forum_pages_fail_after_browser_primary_when_no_usable_candidates_remain(self):
@@ -407,6 +407,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertEqual(
             fs_get_calls,
             [
+                f"{plugin._base_url}/plugin.php?id=dd_sign",
                 f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
                 f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=166",
             ],
@@ -439,7 +440,11 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         forum_url = f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141"
         self.assertEqual(result["status"], "failed")
         self.assertIn("blocked_fids=141", result["reason"])
-        self.assertEqual(fetch_events, [("browser", forum_url), ("fs_get", forum_url)])
+        self.assertEqual(fetch_events, [
+            ("fs_get", f"{plugin._base_url}/plugin.php?id=dd_sign"),
+            ("browser", forum_url),
+            ("fs_get", forum_url),
+        ])
         uniform_mock.assert_not_called()
         sleep_mock.assert_not_called()
 
@@ -489,7 +494,10 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertEqual(result["status"], "skipped")
         self.assertIn("AI 评估未通过", result["reason"])
         self.assertNotIn("安全页/权限页", result["reason"])
-        self.assertEqual(fs_get_calls, [f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141"])
+        self.assertEqual(fs_get_calls, [
+            f"{plugin._base_url}/plugin.php?id=dd_sign",
+            f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
+        ])
 
     def test_detail_page_uses_browser_primary_before_hard_filtering(self):
         plugin_module = _load_plugin_module_with_stubs()

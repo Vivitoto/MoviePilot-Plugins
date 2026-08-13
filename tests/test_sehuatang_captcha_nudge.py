@@ -64,22 +64,22 @@ class SehuatangCaptchaNudgeTest(unittest.TestCase):
         self.assertNotIn("setAnswer(", rotate_body)
         self.assertIn("String(angle)", source)
 
-    def test_sehuatang_version_metadata_is_1_1_4_with_six_history_entries(self):
+    def test_sehuatang_version_metadata_is_1_1_5_with_six_history_entries(self):
         init_source = PLUGIN_INIT.read_text(encoding="utf-8")
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.4"', init_source)
-        self.assertEqual(sehuatang["version"], "1.1.4")
+        self.assertIn('plugin_version = "1.1.5"', init_source)
+        self.assertEqual(sehuatang["version"], "1.1.5")
         self.assertEqual(
             list(sehuatang["history"]),
             [
+                "v1.1.5",
                 "v1.1.4",
                 "v1.1.3",
                 "v1.1.2",
                 "v1.1.1",
                 "v1.1.0",
-                "v1.0.18",
             ],
         )
 

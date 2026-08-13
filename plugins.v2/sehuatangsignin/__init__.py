@@ -64,7 +64,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1100,6 +1100,18 @@ class SehuatangSignin(_PluginBase):
             if not fs_sid:
                 logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖失败：FS 会话创建失败")
                 return self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")
+
+            warmup_url = f"{self._base_url}/plugin.php?id=dd_sign"
+            try:
+                warmup_html = fs_get(fs_sid, warmup_url, cookies)
+                if self._is_auto_reply_blocked_page(warmup_html):
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热仍返回安全页/权限页，继续尝试持久浏览器 settle")
+                elif str(warmup_html or "").strip():
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖已通过 FlareSolverr 预热会话")
+                else:
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热未返回页面，继续尝试浏览器流程")
+            except Exception as e:
+                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热失败，继续尝试浏览器流程：{e}")
 
             browser_session_key = f"auto-reply-{account_id}-{uuid.uuid4().hex[:8]}"
             try:
