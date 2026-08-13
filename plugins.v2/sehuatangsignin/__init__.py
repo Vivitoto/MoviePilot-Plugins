@@ -60,11 +60,12 @@ from .captcha_server import (
 )
 
 
+
 class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.5"
+    plugin_version = "1.1.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1096,6 +1097,11 @@ class SehuatangSignin(_PluginBase):
         request_state = {"requested": False}
         try:
             cookies = self._build_cookies(account)
+            logger.info(
+                f"[SehuatangSignin] [{account_id}] 自动回帖诊断："
+                f"proxy={'yes' if self._proxy_url else 'no'}, "
+                f"cookie_names={','.join(self._auto_reply_cookie_names(cookies)) or '-'}"
+            )
             fs_sid = fs_create_session()
             if not fs_sid:
                 logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖失败：FS 会话创建失败")
@@ -1104,12 +1110,13 @@ class SehuatangSignin(_PluginBase):
             warmup_url = f"{self._base_url}/plugin.php?id=dd_sign"
             try:
                 warmup_html = fs_get(fs_sid, warmup_url, cookies)
+                warmup_diag = self._auto_reply_page_diag(warmup_html)
                 if self._is_auto_reply_blocked_page(warmup_html):
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热仍返回安全页/权限页，继续尝试持久浏览器 settle")
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热仍返回安全页/权限页，继续尝试持久浏览器 settle：{warmup_diag}")
                 elif str(warmup_html or "").strip():
-                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖已通过 FlareSolverr 预热会话")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖已通过 FlareSolverr 预热会话：{warmup_diag}")
                 else:
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热未返回页面，继续尝试浏览器流程")
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热未返回页面，继续尝试浏览器流程：{warmup_diag}")
             except Exception as e:
                 logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖 FlareSolverr 预热失败，继续尝试浏览器流程：{e}")
 
@@ -1278,6 +1285,40 @@ class SehuatangSignin(_PluginBase):
         self._auto_reply_pace_request(request_state)
         return fs_get(fs_sid, url, cookies)
 
+    @staticmethod
+    def _auto_reply_cookie_names(cookies: list) -> List[str]:
+        names = []
+        for item in cookies or []:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(str(item.get("name")))
+        return sorted(set(names))
+
+    @classmethod
+    def _auto_reply_page_classes(cls, html_text: str) -> List[str]:
+        text = str(html_text or "")
+        low = text.lower()
+        classes = []
+        if any(marker in low for marker in ("static/safe/js/web.js", "safeid=", "enter-btn", "请完成安全验证", "安全检查")):
+            classes.append("safe_gate")
+        if any(marker in low for marker in ("cf-challenge", "cf-turnstile", "challenge-platform", "cloudflare", "just a moment")):
+            classes.append("cloudflare")
+        if any(marker in low for marker in ("您没有权限", "抱歉，您没有权限", "无权访问")):
+            classes.append("permission")
+        if any(marker in low for marker in ("需要登录",)):
+            classes.append("login_required")
+        if any(marker in low for marker in ("forum.php?mod=viewthread", "threadlist", "normalthread")):
+            classes.append("forum")
+        if any(marker in low for marker in ('id="thread_subject"', "fastpostmessage", "replysubmit", "formhash")):
+            classes.append("thread")
+        if "dd_sign" in low or "signin-btn" in low:
+            classes.append("signin")
+        return classes or ["empty" if not text.strip() else "unknown"]
+
+    @classmethod
+    def _auto_reply_page_diag(cls, html_text: str) -> str:
+        text = str(html_text or "")
+        return f"len={len(text)}, class={','.join(cls._auto_reply_page_classes(text))}"
+
     def _auto_reply_browser_primary_get(self, fs_sid: str, url: str, cookies: list,
                                         request_state: Dict[str, Any],
                                         account_id: str = "", page_label: str = "",
@@ -1293,7 +1334,7 @@ class SehuatangSignin(_PluginBase):
             else:
                 if str(html or "").strip():
                     if self._is_auto_reply_blocked_page(html):
-                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器返回安全页/权限页，重试一次")
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器返回安全页/权限页，重试一次：{self._auto_reply_page_diag(html)}")
                         try:
                             retry_html = fs_browser_session_get_text(browser_session_key, url, cookies, wait_seconds=6)
                         except Exception as e:
@@ -1304,10 +1345,10 @@ class SehuatangSignin(_PluginBase):
                         if self._is_auto_reply_blocked_page(html):
                             logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器重试后仍为安全页/权限页，改用短浏览器/FS 备用")
                         else:
-                            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取")
+                            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取：{self._auto_reply_page_diag(html)}")
                             return html
                     else:
-                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取")
+                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取：{self._auto_reply_page_diag(html)}")
                         return html
                 else:
                     logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器未返回页面，改用短浏览器/FS 备用")
@@ -1320,23 +1361,25 @@ class SehuatangSignin(_PluginBase):
         else:
             if str(html or "").strip():
                 if self._is_auto_reply_blocked_page(html):
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器返回安全页/权限页，改用 FS GET 备用")
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器返回安全页/权限页，改用 FS GET 备用：{self._auto_reply_page_diag(html)}")
                     blocked_html = html
                 else:
-                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过短浏览器获取")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过短浏览器获取：{self._auto_reply_page_diag(html)}")
                     return html
             else:
                 logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器未返回页面，改用 FS GET 备用")
 
         html = fs_get(fs_sid, url, cookies)
-        if not str(html or "").strip() and self._is_auto_reply_blocked_page(blocked_html):
-            html = blocked_html
         if self._is_auto_reply_blocked_page(html):
-            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用后仍为安全页/权限页")
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用后仍为安全页/权限页：{self._auto_reply_page_diag(html)}")
         elif str(html or "").strip():
-            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过 FS GET 备用获取")
+            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过 FS GET 备用获取：{self._auto_reply_page_diag(html)}")
+            return html
         else:
-            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用未返回页面")
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用未返回页面：{self._auto_reply_page_diag(html)}")
+
+        if not str(html or "").strip() and self._is_auto_reply_blocked_page(blocked_html):
+            return blocked_html
         return html
 
     @staticmethod

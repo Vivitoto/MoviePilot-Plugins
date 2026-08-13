@@ -199,9 +199,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.5"', source)
-        self.assertEqual(sehuatang["version"], "1.1.5")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.5"])
+        self.assertIn('plugin_version = "1.1.6"', source)
+        self.assertEqual(sehuatang["version"], "1.1.6")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.6"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -303,6 +303,35 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("reverse=True", sort_body)
         self.assertIn("time_context = context.replace(match.group(0), \" \")", extract_body)
         self.assertIn("_extract_auto_reply_time_metadata(time_context)", extract_body)
+
+
+    def test_auto_reply_does_not_depend_on_curl_cffi_fallback(self):
+        source = _source()
+        requirements = (ROOT / "plugins.v2" / "sehuatangsignin" / "requirements.txt").read_text(encoding="utf-8")
+        self.assertNotIn("curl_cffi", source)
+        self.assertNotIn("curl_cffi", requirements)
+        self.assertNotIn("HAS_CURL_CFFI", source)
+        self.assertNotIn("CURL_CFFI_IMPERSONATE", source)
+
+    def test_auto_reply_diagnostic_helpers_are_sanitized(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        cookies = [
+            {"name": "cPNj_2132_auth", "value": "secret-auth"},
+            {"name": "_safe", "value": "secret-safe"},
+        ]
+        names = plugin._auto_reply_cookie_names(cookies)
+        self.assertEqual(names, ["_safe", "cPNj_2132_auth"])
+        self.assertNotIn("secret", ",".join(names))
+        self.assertEqual(plugin._auto_reply_page_classes('<html>safeid=abc static/safe/js/web.js</html>'), ["safe_gate"])
+        self.assertIn("forum", plugin._auto_reply_page_classes('<a href="forum.php?mod=viewthread&tid=1">x</a><div id="threadlist"></div>'))
+        self.assertIn("thread", plugin._auto_reply_page_classes('<div id="thread_subject">t</div><textarea id="fastpostmessage"></textarea>'))
+        diag = plugin._auto_reply_page_diag('<div id="thread_subject">t</div>')
+        self.assertIn("len=", diag)
+        self.assertIn("thread", diag)
+        self.assertNotIn("secret", diag)
+
+
 
     def test_forum_and_detail_pages_use_browser_primary_after_fs_warmup_on_success(self):
         plugin_module = _load_plugin_module_with_stubs()

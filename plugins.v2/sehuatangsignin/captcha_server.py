@@ -1173,22 +1173,41 @@ def _merge_browser_cookies(cookies: list, browser_cookies: list):
     _merge_solution_cookies(cookies, returned)
 
 
-def _launch_cloak_browser():
+def _launch_cloak_browser(proxy: str = ""):
     if cloak_launch is None:
         return None, None, f"cloakbrowser unavailable: {_cloak_import_error}"
-    try:
-        return cloak_launch(headless=True), None, ""
-    except Exception as e:
-        return None, None, f"cloakbrowser launch failed: {e}"
+    proxy = (proxy or "").strip()
+    attempts = []
+    if proxy:
+        attempts.extend([
+            ("launch proxy option", {"headless": True, "proxy": {"server": proxy}}),
+            ("chromium proxy arg", {"headless": True, "args": [f"--proxy-server={proxy}"]}),
+        ])
+    else:
+        attempts.append(("plain launch", {"headless": True}))
+    errors = []
+    for label, kwargs in attempts:
+        try:
+            return cloak_launch(**kwargs), None, ""
+        except TypeError as e:
+            errors.append(f"{label}: {e}")
+            continue
+        except Exception as e:
+            return None, None, f"cloakbrowser launch failed via {label}: {e}"
+    return None, None, f"cloakbrowser launch failed: {'; '.join(errors)}"
 
 
-def _launch_playwright_browser():
+def _launch_playwright_browser(proxy: str = ""):
     if sync_playwright is None:
         return None, None, f"playwright unavailable: {_playwright_import_error}"
     runner = None
+    proxy = (proxy or "").strip()
     try:
         runner = sync_playwright().start()
-        return runner.chromium.launch(headless=True), runner, ""
+        launch_kwargs = {"headless": True}
+        if proxy:
+            launch_kwargs["proxy"] = {"server": proxy}
+        return runner.chromium.launch(**launch_kwargs), runner, ""
     except Exception as e:
         try:
             if runner:
@@ -1207,7 +1226,7 @@ def fs_browser_get(fs_sid: str, url: str, cookies: list, wait_seconds: float | N
     for engine, launcher in launchers:
         browser = runner = context = None
         try:
-            browser, runner, err = launcher()
+            browser, runner, err = launcher(proxy)
             if not browser:
                 last_error = err or last_error
                 logger.debug(f"[SehuatangCaptcha] Browser GET skip {engine}: {last_error}")
@@ -1268,7 +1287,7 @@ def fs_browser_post(fs_sid: str, url: str, body: str, cookies: list,
     for engine, launcher in launchers:
         browser = runner = context = None
         try:
-            browser, runner, err = launcher()
+            browser, runner, err = launcher(proxy)
             if not browser:
                 last_error = err or last_error
                 logger.debug(f"[SehuatangCaptcha] Browser POST skip {engine}: {last_error}")
@@ -1327,7 +1346,7 @@ def _browser_check_post(fs_sid: str, url: str, body: str, cookies: list) -> dict
     last_error = "no browser engine available"
     launchers = (("cloakbrowser", _launch_cloak_browser), ("playwright", _launch_playwright_browser))
     for engine, launcher in launchers:
-        browser, runner, err = launcher()
+        browser, runner, err = launcher(proxy)
         if not browser:
             last_error = err or last_error
             logger.debug(f"[SehuatangCaptcha] Browser check skip {engine}: {last_error}")
@@ -1411,7 +1430,7 @@ def _create_browser_state(session_key: str, fs_sid: str, cookies: list) -> dict 
     for engine, launcher in launchers:
         browser = runner = context = page = None
         try:
-            browser, runner, err = launcher()
+            browser, runner, err = launcher(proxy)
             if not browser:
                 last_error = err or last_error
                 logger.debug(f"[SehuatangCaptcha] Persistent browser skip {engine}: {last_error}")
@@ -1528,6 +1547,9 @@ def fs_browser_session_get_text(session_key: str, url: str, cookies: list,
     page = state["page"]
     engine = state.get("engine") or "browser"
     try:
+        context = state.get("context")
+        if context:
+            _add_browser_cookies(context, cookies)
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
         _settle_browser_gate(page, engine, wait_seconds=wait_seconds)
         html = page.content()
@@ -1556,6 +1578,9 @@ def fs_browser_session_post(session_key: str, url: str, body: str, cookies: list
     if not referrer.startswith(BASE_URL):
         referrer = BASE_URL
     try:
+        context = state.get("context")
+        if context:
+            _add_browser_cookies(context, cookies)
         response = state["page"].evaluate(
             """
             async ({ url, body, headers, referrer }) => {
