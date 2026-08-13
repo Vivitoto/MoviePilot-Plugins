@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -132,6 +132,8 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_max_attempts_per_day = 1
     _auto_reply_ai_timeout = 45
     _auto_reply_polish_deadline_seconds = 360
+    _auto_reply_skipped_threads_limit = 800
+    _auto_reply_skipped_threads_retention_days = 180
 
     # Global lock for site captcha endpoint operations across all accounts.
     # It serializes both fetch and check calls to reduce site-wide 429 risk.
@@ -150,6 +152,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_plan_key = "auto_reply_plan"
     _auto_reply_history_key = "auto_reply_history"
     _auto_replied_threads_key = "auto_replied_threads"
+    _auto_reply_skipped_threads_key = "auto_reply_skipped_threads"
     _auto_reply_success_key = "auto_reply_success_by_day"
     _auto_reply_status_labels = {"success": "成功", "failed": "失败", "skipped": "跳过"}
 
@@ -1156,11 +1159,18 @@ class SehuatangSignin(_PluginBase):
                     if not tid or tid in seen_tids:
                         continue
                     seen_tids.add(tid)
+                    cached_skip = self._get_auto_reply_skipped_thread(tid)
+                    if cached_skip:
+                        skipped_candidates += 1
+                        reason = cached_skip.get("reason") or "已在跳过缓存中"
+                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：命中跳过缓存：{reason}")
+                        continue
                     ok, reason = self._hard_filter_auto_reply_candidate(candidate, forum_ids, account_id=account_id)
                     if ok:
                         all_candidates.append(candidate)
                     else:
                         skipped_candidates += 1
+                        self._maybe_mark_auto_reply_skipped_thread(candidate, reason, "hard")
                         logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：{reason}")
 
             if not all_candidates:
@@ -1179,6 +1189,12 @@ class SehuatangSignin(_PluginBase):
             last_skip_message = "候选帖均未通过安全评估"
             for candidate in all_candidates:
                 tid = str(candidate.get("tid") or "")
+                cached_skip = self._get_auto_reply_skipped_thread(tid)
+                if cached_skip:
+                    reason = cached_skip.get("reason") or "已在跳过缓存中"
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 跳过：命中跳过缓存：{reason}")
+                    last_skip_message = f"命中跳过缓存：{reason}"
+                    continue
                 detail_url = str(candidate.get("url") or "")
                 detail_html = self._auto_reply_browser_primary_get(
                     fs_sid,
@@ -1198,6 +1214,7 @@ class SehuatangSignin(_PluginBase):
                 )
                 if not ok:
                     logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 跳过：{reason}")
+                    self._maybe_mark_auto_reply_skipped_thread(detail, reason, "hard")
                     last_skip_message = reason or last_skip_message
                     continue
 
@@ -1216,6 +1233,9 @@ class SehuatangSignin(_PluginBase):
                     raise
                 if not assessment:
                     logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 跳过：AI 评估未通过")
+                    ai_skip_reason = str(detail.get("_auto_reply_ai_skip_reason") or "")
+                    if ai_skip_reason:
+                        self._mark_auto_reply_skipped_thread(detail, ai_skip_reason, "ai")
                     last_skip_message = "AI 评估未通过"
                     continue
 
@@ -1241,6 +1261,7 @@ class SehuatangSignin(_PluginBase):
                 ok, reason = self._preflight_auto_reply_submit(detail, reply, forum_ids, account_id)
                 if not ok:
                     logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖详情 {tid} 提交前跳过：{reason}")
+                    self._maybe_mark_auto_reply_skipped_thread(detail, reason, "preflight")
                     last_skip_message = reason or "提交前安全复核未通过"
                     continue
 
@@ -2109,8 +2130,6 @@ class SehuatangSignin(_PluginBase):
     @staticmethod
     def _has_auto_reply_risky_link(html_text: str, base_url: str = "") -> bool:
         text = html_text or ""
-        base_host = urlparse(base_url or "https://sehuatang.net").hostname or "sehuatang.net"
-        base_host = base_host.lower().lstrip(".")
         url_patterns = [
             r'\b(?:https?|ftp)://[^\s\"\'<>()]+',
             r'\b(?:magnet|ed2k|thunder)[:：][^\s\"\'<>()]+',
@@ -2120,22 +2139,30 @@ class SehuatangSignin(_PluginBase):
             urls.extend(re.findall(pattern, text, re.I))
         for match in re.finditer(r'\b(?:href|src)=[\"\']([^\"\']+)[\"\']', text, re.I):
             urls.append(html_lib.unescape(match.group(1)))
+        risky_domains = [
+            "t.me", "telegram.me", "telegram.org", "discord.gg", "discord.com",
+            "line.me", "whatsapp.com", "wa.me",
+            "bit.ly", "tinyurl.com", "goo.gl", "t.co", "is.gd", "cutt.ly",
+            "rebrand.ly", "shorturl.at", "url.cn", "dwz.cn", "sourl.cn",
+        ]
+
+        def is_risky_host(host: str) -> bool:
+            host = (host or "").lower().lstrip(".")
+            return any(host == domain or host.endswith(f".{domain}") for domain in risky_domains)
+
         for raw_url in urls:
             parsed = urlparse(raw_url.strip())
-            scheme = (parsed.scheme or "").lower()
-            if scheme in {"magnet", "ed2k", "thunder", "ftp"}:
-                return True
             host = (parsed.hostname or "").lower().lstrip(".")
-            if host and host != base_host and not host.endswith(f".{base_host}"):
+            if host and is_risky_host(host):
                 return True
 
-        risky_domains = [
-            "t.me", "telegram.me", "discord.gg", "discord.com", "line.me",
-            "whatsapp.com", "mega.nz", "pan.baidu.com", "aliyundrive.com",
-            "alipan.com", "quark.cn", "115.com", "pikpak", "bit.ly", "tinyurl.com",
+        shortener_or_redirect_markers = [
+            "短链接", "短网址", "跳转链接", "跳转地址",
         ]
         lower = text.lower()
-        return any(domain in lower for domain in risky_domains)
+        if any(domain in lower for domain in risky_domains):
+            return True
+        return any(marker.lower() in lower for marker in shortener_or_redirect_markers)
 
     @staticmethod
     def _normalize_auto_reply_risk_text(text: str) -> str:
@@ -2183,7 +2210,7 @@ class SehuatangSignin(_PluginBase):
         if item.get("sticky_like"):
             return False, "置顶/公告/规则上下文"
         if item.get("risky_link"):
-            return False, "外链/下载协议风险"
+            return False, "高风险联系方式/短链/跳转风险"
         if self._has_auto_reply_contact_or_diversion_text(f"{title}\n{content}"):
             return False, "联系方式/站外引流风险"
         if account_id and require_detail:
@@ -2288,7 +2315,134 @@ class SehuatangSignin(_PluginBase):
                 return value
         return None
 
+    def _load_auto_reply_skipped_threads(self) -> Dict[str, Dict[str, Any]]:
+        data = self.get_data(self._auto_reply_skipped_threads_key) or {}
+        if isinstance(data, dict) and isinstance(data.get("records"), dict):
+            data = data.get("records") or {}
+
+        records: Dict[str, Dict[str, Any]] = {}
+        if isinstance(data, dict):
+            iterator = data.items()
+        elif isinstance(data, list):
+            iterator = ((item.get("tid"), item) for item in data if isinstance(item, dict))
+        else:
+            iterator = []
+
+        for tid, item in iterator:
+            if not isinstance(item, dict):
+                continue
+            tid_text = str(item.get("tid") or tid or "").strip()
+            if not tid_text:
+                continue
+            record = dict(item)
+            record["tid"] = tid_text
+            records[tid_text] = record
+        return self._prune_auto_reply_skipped_threads(records)
+
+    def _prune_auto_reply_skipped_threads(self, records: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        try:
+            limit = max(1, min(1000, int(self._auto_reply_skipped_threads_limit or 800)))
+        except (TypeError, ValueError):
+            limit = 800
+        try:
+            retention_days = max(1, min(365, int(self._auto_reply_skipped_threads_retention_days or 180)))
+        except (TypeError, ValueError):
+            retention_days = 180
+
+        now = self._auto_reply_now()
+        now_ts = now.timestamp()
+        cutoff_ts = now_ts - retention_days * 86400
+        kept = []
+        for tid, item in records.items():
+            if not isinstance(item, dict):
+                continue
+            record = dict(item)
+            tid_text = str(record.get("tid") or tid or "").strip()
+            if not tid_text:
+                continue
+            try:
+                ts = float(record.get("ts") or 0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            if ts <= 0:
+                parsed_time = self._parse_auto_reply_datetime(record.get("time"))
+                ts = parsed_time.timestamp() if parsed_time else now_ts
+            if ts < cutoff_ts:
+                continue
+            record["tid"] = tid_text
+            record["ts"] = ts
+            kept.append((ts, tid_text, record))
+
+        kept.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return {tid: record for _, tid, record in kept[:limit]}
+
+    def _save_auto_reply_skipped_threads(self, records: Dict[str, Dict[str, Any]]):
+        self.save_data(self._auto_reply_skipped_threads_key, self._prune_auto_reply_skipped_threads(records))
+
+    def _get_auto_reply_skipped_thread(self, tid: str) -> Optional[Dict[str, Any]]:
+        tid = str(tid or "").strip()
+        if not tid:
+            return None
+        return self._load_auto_reply_skipped_threads().get(tid)
+
+    @staticmethod
+    def _is_auto_reply_skip_reason_cacheable(reason: str, category: str = "") -> bool:
+        text = str(reason or "")
+        category = str(category or "").lower()
+        if category == "ai":
+            return text.startswith("AI 判定")
+        cacheable_fragments = [
+            "置顶/公告/规则上下文",
+            "联系方式/站外引流风险",
+            "高风险联系方式/短链/跳转风险",
+            "标题黑名单",
+            "内容黑名单",
+            "作者黑名单",
+            "管理账号作者",
+            "钓鱼/诱捕/自动回复检测风险",
+            "规则/公告/管理类关键词",
+        ]
+        return any(fragment in text for fragment in cacheable_fragments)
+
+    def _maybe_mark_auto_reply_skipped_thread(self, item: Dict[str, Any], reason: str, category: str = "hard"):
+        if self._is_auto_reply_skip_reason_cacheable(reason, category):
+            self._mark_auto_reply_skipped_thread(item, reason, category)
+
+    def _mark_auto_reply_skipped_thread(self, item: Dict[str, Any], reason: str, category: str = "hard"):
+        tid = str((item or {}).get("tid") or "").strip()
+        if not tid:
+            return
+        now = self._auto_reply_now()
+        records = self._load_auto_reply_skipped_threads()
+        records[tid] = {
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "day": now.strftime("%Y-%m-%d"),
+            "ts": now.timestamp(),
+            "category": str(category or "hard")[:40],
+            "reason": str(reason or "")[:160],
+            "fid": str((item or {}).get("fid") or ""),
+            "tid": tid,
+            "title": str((item or {}).get("title") or "")[:160],
+        }
+        self._save_auto_reply_skipped_threads(records)
+
+    @staticmethod
+    def _auto_reply_ai_skip_cache_reason(assessment: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(assessment, dict):
+            return ""
+        risk_level = str(assessment.get("risk_level") or "").strip().lower()
+        should_reply = assessment.get("should_reply")
+        if should_reply is not False and risk_level not in {"medium", "high", "critical", "unsafe", "unsuitable"}:
+            return ""
+        risk_reasons = assessment.get("risk_reasons") or []
+        if not isinstance(risk_reasons, list):
+            risk_reasons = [risk_reasons]
+        summary = "；".join(str(item or "").strip()[:60] for item in risk_reasons if str(item or "").strip())
+        label = risk_level or "unsuitable"
+        return f"AI 判定 {label}：{summary}"[:160] if summary else f"AI 判定 {label} 不适合回帖"
+
     def _assess_auto_reply_with_ai(self, detail: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        detail.pop("_auto_reply_ai_skip_reason", None)
         prompt = self._build_auto_reply_assessment_prompt(detail)
         raw_response = self._call_auto_reply_llm_with_timeout(prompt, "评估")
         if not raw_response:
@@ -2297,6 +2451,9 @@ class SehuatangSignin(_PluginBase):
         assessment = self._extract_auto_reply_ai_json(raw_response)
         validated = self._validate_auto_reply_assessment(assessment)
         if not validated:
+            skip_reason = self._auto_reply_ai_skip_cache_reason(assessment)
+            if skip_reason:
+                detail["_auto_reply_ai_skip_reason"] = skip_reason
             logger.info("[SehuatangSignin] 自动回帖 AI 评估未通过低风险校验")
         return validated
 
@@ -2439,11 +2596,12 @@ class SehuatangSignin(_PluginBase):
             "Adult/sensitive/resource content alone is not a rejection reason and must not raise risk.\n"
             "普通资源分享/预览帖如未命中强制拒绝项，可评估为 should_reply=true 且 risk_level=low。\n"
             "Ordinary resource share/preview posts may be should_reply=true with risk_level=low unless they hit mandatory exclusions.\n"
-            "回复可见、预览播放器、番号列表、资源说明本身不等同于诱导下载；只有外链跳转、联系方式、加群、私信、站点访问方法或明确下载诱导才必须拒绝。\n"
+            "回复可见、预览播放器、番号列表、资源说明、普通外链和 magnet/ed2k/thunder/ftp/http 下载协议本身不等同于风险或诱导下载。\n"
+            "只有联系方式、加群、私信、站点访问方法、短链/跳转引流或明显诈骗式下载诱导才必须拒绝。\n"
             "钓鱼/诱捕/反自动回复检测必须极度保守：如果帖子暗示回帖后会识别、验证、筛选、登记、检测账号/真人/机器人/自动回复，或回帖后才暴露外链、联系方式、群组、最新地址、访问方法，必须 should_reply=false。\n"
             "Normal reply-to-view content alone is allowed, but any trap where replying reveals risk, identifies the account, tests automation, verifies humans/bots, or exposes offsite/contact/access information must be rejected.\n"
-            "必须拒绝 rules/announcements/moderation/site-admin/safe-gate/access-method/latest-address/whitelist/publisher/help/tutorials/complaints/appeals/recruitment/cracking-tutorial/external/contact/group/private-message/traffic-diversion/link-risk/download-inducement/phishing/scam/ads/soft-ad/disputes/inadequate-info。\n"
-            "对应中文包括规则、公告、版务、站务、站点管理、安全入口、访问方法、最新地址、白名单、发布器、求助、教程、投诉、申诉、招募、破解教程、外部渠道、联系方式、群组、私信、引流、外链风险、诱导下载、钓鱼、诈骗、广告、软广、争议、信息不足。\n"
+            "必须拒绝 rules/announcements/moderation/site-admin/safe-gate/access-method/latest-address/whitelist/publisher/help/tutorials/complaints/appeals/recruitment/cracking-tutorial/contact/group/private-message/traffic-diversion/shortener/phishing/scam/ads/soft-ad/disputes/inadequate-info。\n"
+            "对应中文包括规则、公告、版务、站务、站点管理、安全入口、访问方法、最新地址、白名单、发布器、求助、教程、投诉、申诉、招募、破解教程、联系方式、群组、私信、引流、短链、跳转、钓鱼、诈骗、广告、软广、争议、信息不足。\n"
             "JSON 格式：{\"should_reply\": true, \"risk_level\": \"low\", \"risk_reasons\": []}\n"
             f"补充要求（只能收紧，不能放宽上述拒绝规则）：{custom_prompt or '无'}\n"
             f"版块 ID：{detail.get('fid') or '-'}\n"

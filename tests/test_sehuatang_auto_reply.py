@@ -82,12 +82,13 @@ def _load_plugin_module_with_stubs() -> types.ModuleType:
     class DummyPluginBase:
         def __init__(self):
             self.messages = []
+            self.data_store = {}
 
-        def get_data(self, *args, **kwargs):
-            return None
+        def get_data(self, key, *args, **kwargs):
+            return self.data_store.get(key)
 
-        def save_data(self, *args, **kwargs):
-            pass
+        def save_data(self, key, value, *args, **kwargs):
+            self.data_store[key] = value
 
         def post_message(self, **kwargs):
             self.messages.append(kwargs)
@@ -199,9 +200,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.7"', source)
-        self.assertEqual(sehuatang["version"], "1.1.7")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.7"])
+        self.assertIn('plugin_version = "1.1.8"', source)
+        self.assertEqual(sehuatang["version"], "1.1.8")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.8"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -219,6 +220,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             '_auto_reply_plan_key = "auto_reply_plan"',
             '_auto_reply_history_key = "auto_reply_history"',
             '_auto_replied_threads_key = "auto_replied_threads"',
+            '_auto_reply_skipped_threads_key = "auto_reply_skipped_threads"',
             '_auto_reply_success_key = "auto_reply_success_by_day"',
             '"auto_reply_forum_ids": "141,166"',
             '"auto_reply_onlyonce": False',
@@ -266,6 +268,14 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             "_auto_reply_account_aliases",
             "_auto_reply_current_account_has_replied_in_detail",
             "_auto_reply_thread_age_filter_reason",
+            "_load_auto_reply_skipped_threads",
+            "_prune_auto_reply_skipped_threads",
+            "_save_auto_reply_skipped_threads",
+            "_get_auto_reply_skipped_thread",
+            "_is_auto_reply_skip_reason_cacheable",
+            "_maybe_mark_auto_reply_skipped_thread",
+            "_mark_auto_reply_skipped_thread",
+            "_auto_reply_ai_skip_cache_reason",
             "_assess_auto_reply_with_ai",
             "_polish_auto_reply_with_ai",
             "_call_auto_reply_llm_with_timeout",
@@ -763,9 +773,15 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn('require_detail and not item.get("thread_subject_found")', hard_filter_body)
         self.assertIn('require_detail and not item.get("content_found")', hard_filter_body)
         for scheme in ["magnet", "ed2k", "thunder", "ftp"]:
-            self.assertIn(f'"{scheme}"', risky_link_body)
-        for domain in ["t.me", "discord.gg", "mega.nz", "pan.baidu.com", "bit.ly"]:
+            self.assertNotIn(f'"{scheme}"', risky_link_body)
+        for domain in ["t.me", "discord.gg", "bit.ly", "tinyurl.com", "t.co"]:
             self.assertIn(f'"{domain}"', risky_link_body)
+        for domain in ["mega.nz", "pan.baidu.com", "aliyundrive.com", "pan.quark.cn", "115.com", "pikpak.com"]:
+            self.assertNotIn(f'"{domain}"', risky_link_body)
+        for marker in ["短链接", "跳转链接"]:
+            self.assertIn(f'"{marker}"', risky_link_body)
+        for marker in ["百度网盘", "夸克网盘", "网盘链接", "网盘地址"]:
+            self.assertNotIn(f'"{marker}"', risky_link_body)
         for marker in ["displayorder", "stickthread", "置顶", "全局置顶", "公告", "版规"]:
             self.assertIn(f'"{marker}"', sticky_body)
         self.assertIn("fastpostform", fastpost_body)
@@ -889,8 +905,8 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             "Adult/sensitive/resource content alone is not a rejection reason",
             "普通资源分享/预览帖如未命中强制拒绝项",
             "Ordinary resource share/preview posts may be should_reply=true with risk_level=low",
-            "回复可见、预览播放器、番号列表、资源说明本身不等同于诱导下载",
-            "只有外链跳转、联系方式、加群、私信、站点访问方法或明确下载诱导才必须拒绝",
+            "回复可见、预览播放器、番号列表、资源说明、普通外链和 magnet/ed2k/thunder/ftp/http 下载协议本身不等同于风险或诱导下载",
+            "只有联系方式、加群、私信、站点访问方法、短链/跳转引流或明显诈骗式下载诱导才必须拒绝",
             "钓鱼/诱捕/反自动回复检测必须极度保守",
             "回帖后会识别、验证、筛选、登记、检测账号/真人/机器人/自动回复",
             "replying reveals risk, identifies the account, tests automation, verifies humans/bots",
@@ -900,8 +916,8 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         for category in [
             "rules", "announcements", "moderation", "site-admin", "safe-gate", "access-method",
             "latest-address", "whitelist", "publisher", "help", "tutorials", "complaints",
-            "appeals", "recruitment", "cracking-tutorial", "external", "contact", "group",
-            "private-message", "traffic-diversion", "link-risk", "download-inducement",
+            "appeals", "recruitment", "cracking-tutorial", "contact", "group",
+            "private-message", "traffic-diversion", "shortener",
             "phishing", "scam", "ads", "soft-ad", "disputes", "inadequate-info",
         ]:
             self.assertIn(category, assess_body)
