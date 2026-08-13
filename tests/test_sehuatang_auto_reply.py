@@ -200,9 +200,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.8"', source)
-        self.assertEqual(sehuatang["version"], "1.1.8")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.8"])
+        self.assertIn('plugin_version = "1.1.9"', source)
+        self.assertEqual(sehuatang["version"], "1.1.9")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.9"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -634,8 +634,6 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("auto_reply_max_attempts_per_day", init_body)
         self.assertIn("min(10", init_body)
         self.assertIn("每日最大回帖尝试次数", form_source)
-        self.assertIn("失败/跳过才在窗口内重试", form_source)
-        self.assertIn("成功一次后当天后续尝试自动跳过", form_source)
         self.assertIn("account_times: List[datetime] = []", plan_body)
         self.assertIn("account_times.sort()", plan_body)
         self.assertIn("enumerate(account_times, start=1)", plan_body)
@@ -1166,6 +1164,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_result_notifications_distinguish_success_failure_and_skip(self):
         source = _source()
         notify_body = _method_source(source, "_notify_auto_reply_result")
+        render_body = _method_source(source, "_render_auto_reply_notify")
         record_body = _method_source(source, "_record_auto_reply_result")
         run_body = _method_source(source, "_run_auto_reply_for_account")
         auto_body = _method_source(source, "_auto_reply_single")
@@ -1184,17 +1183,22 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             self.assertIn(f"def {method}", source)
         self.assertIn('_auto_reply_status_labels = {"success": "成功", "failed": "失败", "skipped": "跳过"}', source)
 
+        self.assertIn('title=f"98自动回帖{label}"', notify_body)
+        self.assertIn("self._render_auto_reply_notify(account_id, result, label)", notify_body)
         for token in [
-            'title=f"98自动回帖{label}"',
-            'f"结果：{label}"',
-            'attempt_index：',
-            'fid：',
-            'tid：',
-            '标题：',
-            '回复摘要：',
+            '"account": str(account_id or "")',
+            '"result": str(label or "")',
+            '"reason": str(result.get("reason") or result.get("message") or "-")',
+            '"fid": str(result.get("fid") or "")',
+            '"tid": str(result.get("tid") or "")',
+            '"title": str(result.get("title") or "")',
+            '"reply": str(result.get("reply_summary") or result.get("reply") or "")',
+            '"time": str(result.get("time") or self._auto_reply_now().strftime("%Y-%m-%d %H:%M:%S"))',
         ]:
-            self.assertIn(token, notify_body)
-        self.assertIn("result.get('reason') or result.get('message')", notify_body)
+            self.assertIn(token, render_body)
+        self.assertIn("template.format(**variables)", render_body)
+        self.assertIn("回帖通知模板无效，回退默认文本", render_body)
+        self.assertIn('result.get("reason") or result.get("message")', render_body)
 
         for token in [
             '"failed": status == "failed"',
@@ -1302,7 +1306,6 @@ class SehuatangAutoReplyTest(unittest.TestCase):
 
         self.assertIn("self._use_flaresolverr = True", init_body)
         self.assertIn("FlareSolverr API 地址（必需）", source)
-        self.assertIn("签到与自动回帖都通过 FlareSolverr", source)
         self.assertNotIn("'model': 'use_flaresolverr'", source)
 
     def test_preflight_revalidates_detail_and_reply_before_post(self):

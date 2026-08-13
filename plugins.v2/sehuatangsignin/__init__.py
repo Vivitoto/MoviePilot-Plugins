@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.8"
+    plugin_version = "1.1.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -123,6 +123,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_forum_ids = "141,166"
     _auto_reply_templates = "感谢分享，辛苦了。\n内容不错，支持一下。\n感谢楼主分享。"
     _auto_reply_custom_prompt = ""
+    _auto_reply_notify_template = "账号：{account}\n结果：{result}\n原因：{reason}\n标题：{title}\n回复：{reply}"
     _auto_reply_title_blacklist = ""
     _auto_reply_content_blacklist = ""
     _auto_reply_author_blacklist = ""
@@ -181,6 +182,9 @@ class SehuatangSignin(_PluginBase):
                 self._auto_reply_forum_ids = str(auto_reply_forum_ids if auto_reply_forum_ids is not None else "").strip()
                 self._auto_reply_templates = str(auto_reply_templates if auto_reply_templates is not None else "").strip()
                 self._auto_reply_custom_prompt = str(config.get("auto_reply_custom_prompt") or "").strip()
+                self._auto_reply_notify_template = str(
+                    config.get("auto_reply_notify_template") or self._auto_reply_notify_template
+                ).strip()
                 self._auto_reply_title_blacklist = str(config.get("auto_reply_title_blacklist") or "").strip()
                 self._auto_reply_content_blacklist = str(config.get("auto_reply_content_blacklist") or "").strip()
                 self._auto_reply_author_blacklist = str(config.get("auto_reply_author_blacklist") or "").strip()
@@ -320,6 +324,7 @@ class SehuatangSignin(_PluginBase):
             "auto_reply_forum_ids": self._auto_reply_forum_ids,
             "auto_reply_templates": self._auto_reply_templates,
             "auto_reply_custom_prompt": self._auto_reply_custom_prompt,
+            "auto_reply_notify_template": self._auto_reply_notify_template,
             "auto_reply_title_blacklist": self._auto_reply_title_blacklist,
             "auto_reply_content_blacklist": self._auto_reply_content_blacklist,
             "auto_reply_author_blacklist": self._auto_reply_author_blacklist,
@@ -406,6 +411,27 @@ class SehuatangSignin(_PluginBase):
                 suffix += 1
                 unique_id = f"{account_id}_{suffix}"
             account_ids.append(unique_id)
+
+        def daily_account_records(records: Any, limit: int = 30) -> List[Dict[str, Any]]:
+            items = records if isinstance(records, list) else []
+            output = []
+            seen = set()
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                day = str(item.get("date") or item.get("time") or "")[:10]
+                account = str(item.get("account") or "-")
+                key = (day, account)
+                if key in seen:
+                    continue
+                seen.add(key)
+                output.append(item)
+                if len(output) >= limit:
+                    break
+            return output
+
+        history = daily_account_records(history, 50)
+        auto_reply_history = daily_account_records(auto_reply_history, 30)
 
         today = datetime.now().strftime("%Y-%m-%d")
         today_results = [h for h in history if str(h.get("time", "")).startswith(today)]
@@ -522,9 +548,14 @@ class SehuatangSignin(_PluginBase):
                 })
             page.append({
                 'component': 'VCard',
-                'props': {'variant': 'flat', 'class': 'mb-3'},
+                'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:14px;'},
                 'content': [
-                    {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': '👤 账号状态'},
+                    {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'd-flex align-center'}, 'content': [
+                            {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-account-multiple-outline'},
+                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '账号状态'},
+                        ]},
+                    ]},
                     {'component': 'VCardText', 'props': {'class': 'pt-0'}, 'content': [
                         {'component': 'VRow', 'props': {'dense': True}, 'content': cards},
                     ]},
@@ -542,21 +573,31 @@ class SehuatangSignin(_PluginBase):
             page.append(chart_card)
 
         if history:
+            def signin_chip(item: Dict[str, Any]) -> Dict[str, Any]:
+                if item.get("success"):
+                    return {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': 'success'}, 'text': '成功'}
+                return {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': 'error'}, 'text': '失败'}
+
             rows = []
             for h in history[:30]:
                 rows.append([
                     {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': h.get('account', '-')},
-                    {'component': 'td', 'text': '✅' if h.get('success') else '❌'},
+                    {'component': 'td', 'content': [signin_chip(h)]},
                     {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': h.get('time', '-')},
-                    {'component': 'td', 'text': h.get('message', '-')},
+                    {'component': 'td', 'props': {'class': 'text-truncate', 'style': 'max-width:420px;'}, 'text': h.get('message', '-')},
                 ])
             page.append({
                 'component': 'VCard',
-                'props': {'variant': 'flat'},
+                'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:14px;'},
                 'content': [
-                    {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': '📋 执行记录'},
+                    {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'd-flex align-center'}, 'content': [
+                            {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-history'},
+                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '签到记录'},
+                        ]},
+                    ]},
                     {'component': 'VTable',
-                     'props': {'density': 'compact', 'hover': True},
+                     'props': {'density': 'compact', 'hover': True, 'class': 'px-2'},
                      'content': [
                          {'component': 'thead', 'content': [{'component': 'tr', 'content': [
                              {'component': 'th', 'text': '账号'}, {'component': 'th', 'text': '结果'},
@@ -632,10 +673,7 @@ class SehuatangSignin(_PluginBase):
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-3'},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'enabled', 'label': '启用插件', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次签到', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'notify', 'label': '发送通知', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
                                     ]
                                 }
                             ]
@@ -659,19 +697,15 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🖥️ 访问与验证码'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🌐 共用访问配置'},
+                                {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis mb-3'}, 'text': '手动签到和自动回帖都会使用这些访问配置。'},
                                 {
                                     'component': 'VRow',
                                     'props': {'dense': True, 'class': 'gy-4'},
                                     'content': [
-                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址', 'placeholder': 'https://sehuatang.net', 'hint': '用于签到页、验证码接口、资料页和积分页；域名变更时修改，不要填写末尾 /', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr API 地址（必需）', 'placeholder': 'http://127.0.0.1:8191/v1', 'hint': '签到与自动回帖都通过 FlareSolverr 访问受保护页面，必须填写完整 /v1 路径。', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98）', 'placeholder': 'http://192.168.31.216:7890'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com', 'hint': '用于通知里的人工验证码链接；留空时使用本机端口地址', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'base_url', 'label': '98 站点网址 / 域名', 'placeholder': 'https://sehuatang.net'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'flaresolverr_url', 'label': 'FlareSolverr API 地址（必需）', 'placeholder': 'http://127.0.0.1:8191/v1'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 6, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'proxy_url', 'label': '代理地址（访问 98，可选）', 'placeholder': 'http://192.168.31.216:7890'}}]},
                                     ]
                                 }
                             ]
@@ -683,11 +717,19 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '🔔 签到通知'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '✍️ 手动签到'},
                                 {
                                     'component': 'VRow',
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-4'},
                                     'content': [
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'onlyonce', 'label': '保存后执行一次签到', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'random_account_order', 'label': '随机账号顺序', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'sm': 6, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'refresh_profile', 'label': '签到后刷新个人资料', 'hide-details': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_port', 'label': '验证码端口', 'type': 'number', 'placeholder': '5099'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_timeout', 'label': '人工验证超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_fetch_timeout', 'label': '获取验证码超时(秒)', 'type': 'number', 'placeholder': '300'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'captcha_check_retries', 'label': '验证失败重试次数', 'type': 'number', 'placeholder': '2'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'public_base_url', 'label': '验证码公网地址（可选）', 'placeholder': 'https://captcha.example.com'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'reminder_enabled', 'label': '启用签到提醒', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': cron_component, 'props': {'model': 'reminder_cron', 'label': '提醒 Cron'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'reminder_text', 'label': '提醒通知内容', 'placeholder': '98 签到提醒：今天还有账号未确认签到。'}}]},
@@ -702,45 +744,31 @@ class SehuatangSignin(_PluginBase):
                         'content': [{
                             'component': 'VCardItem',
                             'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '自动回帖'},
+                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '💬 自动回帖'},
                                 {
                                     'component': 'VRow',
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-4'},
                                     'content': [
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'auto_reply_enabled', 'label': '启用每日自动回帖', 'hide-details': True}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VSwitch', 'props': {'model': 'auto_reply_onlyonce', 'label': '保存后执行一次回帖', 'hide-details': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_start', 'label': '窗口开始', 'placeholder': '09:00', 'hint': 'HH:MM；必须早于结束时间。', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_end', 'label': '窗口结束', 'placeholder': '12:00', 'hint': '仅支持同日窗口，不支持跨午夜。', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_forum_ids', 'label': '版块 ID', 'placeholder': '141,166', 'hint': '逗号分隔；留空或无有效 ID 时不会回帖。', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_attempts_per_day', 'label': '每日最大回帖尝试次数', 'type': 'number', 'placeholder': '1', 'hint': '每账号每天最多尝试回帖次数；失败/跳过才在窗口内重试，成功一次后当天后续尝试自动跳过。', 'persistent-hint': True}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_thread_age_days', 'label': '主题最大天数', 'type': 'number', 'placeholder': '7', 'hint': '默认只回复 7 天内主题；填 0 关闭时间过滤。', 'persistent-hint': True}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_start', 'label': '窗口开始', 'placeholder': '09:00'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_end', 'label': '窗口结束', 'placeholder': '12:00'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_forum_ids', 'label': '版块 ID', 'placeholder': '141,166'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_attempts_per_day', 'label': '每日最大回帖尝试次数', 'type': 'number', 'placeholder': '1'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_thread_age_days', 'label': '主题最大天数', 'type': 'number', 'placeholder': '7'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_min_interval_minutes', 'label': '账号最小回帖间隔(分钟)', 'type': 'number', 'placeholder': '10'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_templates', 'label': '回复参考模板', 'rows': 3, 'auto-grow': True, 'placeholder': '每行一条，AI 只作为参考，不会在 AI 失败时直接套用。'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_custom_prompt', 'label': 'AI 补充提示', 'rows': 2, 'auto-grow': True, 'placeholder': '可补充回复风格或规避规则；不要填写 Cookie、API Key。'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_title_blacklist', 'label': '标题黑名单', 'rows': 2, 'auto-grow': True, 'placeholder': '每行一个关键词'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_content_blacklist', 'label': '内容黑名单', 'rows': 2, 'auto-grow': True, 'placeholder': '每行一个关键词'}}]},
-                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_author_blacklist', 'label': '作者黑名单', 'rows': 2, 'auto-grow': True, 'placeholder': '每行一个用户名或关键词'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_templates', 'label': '回复参考模板', 'rows': 3, 'placeholder': '每行一条，AI 只作为参考，不会在 AI 失败时直接套用。'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_custom_prompt', 'label': 'AI 补充提示', 'rows': 2, 'placeholder': '可补充回复风格或规避规则；不要填写 Cookie、API Key。'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_notify_template', 'label': '回帖结果通知模板', 'rows': 4, 'placeholder': '账号：{account}  结果：{result}  原因：{reason}  标题：{title}  回复：{reply}'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'class': 'py-1'}, 'content': [
+                                            {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': '变量：{account}=账号，{result}=结果，{reason}=原因，{fid}=版块ID，{tid}=主题ID，{title}=标题，{reply}=回复摘要，{time}=执行时间。'},
+                                            {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis mt-1'}, 'text': '示例：账号 {account} 自动回帖{result}：{reason}'},
+                                        ]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_title_blacklist', 'label': '标题黑名单', 'rows': 2, 'placeholder': '每行一个关键词'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_content_blacklist', 'label': '内容黑名单', 'rows': 2, 'placeholder': '每行一个关键词'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 4, 'class': 'py-3'}, 'content': [{'component': 'VTextarea', 'props': {'model': 'auto_reply_author_blacklist', 'label': '作者黑名单', 'rows': 2, 'placeholder': '每行一个用户名或关键词'}}]},
                                     ]
                                 }
-                            ]
-                        }]
-                    },
-                    # ── 前置说明 ──
-                    {
-                        'component': 'VCard',
-                        'props': {'variant': 'flat', 'class': 'mb-2'},
-                        'content': [{
-                            'component': 'VCardItem',
-                            'content': [
-                                {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '📋 简要说明'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '① 98 站点网址用于所有站内请求：签到页、验证码、资料页、积分页；站点换域名时改这里即可。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '② FlareSolverr 负责访问受保护页面；如果当前网络访问 98 不稳定，再填写代理地址。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '③ 验证码公网地址用于通知链接，需要能反代到本插件验证码端口；留空只适合本机/内网访问。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '④ Cookie 从浏览器登录后复制，过期、safe_gate 或资料获取失败时重新填写。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑤ 个人资料刷新只影响账号卡片和金钱趋势；关闭后不影响签到主流程。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑥ 验证码图片只临时保存在会话中，提交后会清理；签到流程结束会清理会话。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis mb-2'}, 'text': '⑦ “发送通知”只控制验证码通知和签到汇总；签到提醒是独立通知，由“启用签到提醒”单独控制。'},
-                                {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '⑧ 签到提醒只看插件本地当天成功记录，不会为了提醒额外访问 98。'},
                             ]
                         }]
                     },
@@ -3067,9 +3095,15 @@ class SehuatangSignin(_PluginBase):
         result = self._normalize_auto_reply_result(result)
         status = self._auto_reply_result_status(result)
         reason = str(result.get("reason") or result.get("message") or "")[:160]
+        date = now.strftime("%Y-%m-%d")
+        # One record per account per day; new result overwrites the old one.
+        history = [
+            item for item in history
+            if not (isinstance(item, dict) and item.get("date") == date and item.get("account") == account_id)
+        ]
         history.insert(0, {
             "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "date": now.strftime("%Y-%m-%d"),
+            "date": date,
             "account": account_id,
             "attempt_index": int(result.get("attempt_index") or 1),
             "success": status == "success",
@@ -3139,26 +3173,37 @@ class SehuatangSignin(_PluginBase):
         result = self._normalize_auto_reply_result(result)
         status = self._auto_reply_result_status(result)
         label = self._auto_reply_status_label(status)
-        lines = [
-            f"账号：{account_id}",
-            f"结果：{label}",
-            f"原因：{result.get('reason') or result.get('message') or '-'}",
-        ]
-        if result.get("attempt_index") is not None:
-            lines.append(f"attempt_index：{result.get('attempt_index')}")
-        if result.get("fid"):
-            lines.append(f"fid：{result.get('fid')}")
-        if result.get("tid"):
-            lines.append(f"tid：{result.get('tid')}")
-        if result.get("title"):
-            lines.append(f"标题：{result.get('title')}")
-        if result.get("reply_summary"):
-            lines.append(f"回复摘要：{result.get('reply_summary')}")
+        text = self._render_auto_reply_notify(account_id, result, label)
         self.post_message(
             mtype=NotificationType.Plugin,
             title=f"98自动回帖{label}",
-            text="\n".join(lines),
+            text=text,
         )
+
+    def _render_auto_reply_notify(self, account_id: str, result: Dict[str, Any], label: Optional[str] = None) -> str:
+        """Render the auto-reply result notification body from the configurable template.
+
+        Supported variables: {account} {result} {reason} {fid} {tid} {title} {reply} {time}.
+        Falls back to a simple default line when the template is empty or invalid.
+        """
+        label = label or self._auto_reply_status_label(result)
+        variables = {
+            "account": str(account_id or ""),
+            "result": str(label or ""),
+            "reason": str(result.get("reason") or result.get("message") or "-"),
+            "fid": str(result.get("fid") or ""),
+            "tid": str(result.get("tid") or ""),
+            "title": str(result.get("title") or ""),
+            "reply": str(result.get("reply_summary") or result.get("reply") or ""),
+            "time": str(result.get("time") or self._auto_reply_now().strftime("%Y-%m-%d %H:%M:%S")),
+        }
+        template = (self._auto_reply_notify_template or "").strip()
+        if template:
+            try:
+                return template.format(**variables)
+            except (KeyError, ValueError, IndexError):
+                logger.warning("[SehuatangSignin] 回帖通知模板无效，回退默认文本")
+        return f"账号：{variables['account']}\n结果：{variables['result']}\n原因：{variables['reason']}\n标题：{variables['title']}\n回复：{variables['reply']}"
 
     def _auto_reply_summary_card(self, plan: Dict[str, Any], history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not self._auto_reply_enabled and not plan and not history:
@@ -3167,37 +3212,76 @@ class SehuatangSignin(_PluginBase):
             plan = {}
         jobs = plan.get("jobs") if isinstance(plan, dict) else []
         jobs = jobs if isinstance(jobs, list) else []
-        recent_history = history[:5] if isinstance(history, list) else []
+        recent_history = history[:6] if isinstance(history, list) else []
+
+        def status_chip(status: str) -> Dict[str, Any]:
+            status_text = str(status or "pending")
+            color_map = {
+                "done": "success",
+                "success": "success",
+                "failed": "error",
+                "skipped": "secondary",
+                "scheduled": "primary",
+                "pending": "warning",
+            }
+            return {
+                'component': 'VChip',
+                'props': {'size': 'x-small', 'variant': 'tonal', 'color': color_map.get(status_text, 'secondary')},
+                'text': status_text,
+            }
+
         rows = []
-        for job in jobs[:10]:
+        for job in jobs[:8]:
             if not isinstance(job, dict):
                 continue
             rows.append([
-                {'component': 'td', 'text': job.get('account', '-')},
+                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': job.get('account', '-')},
                 {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': job.get('run_at', '-')},
-                {'component': 'td', 'text': job.get('status', '-')},
-                {'component': 'td', 'text': job.get('message', '') or '-'},
+                {'component': 'td', 'content': [status_chip(job.get('status') or 'pending')]},
+                {'component': 'td', 'props': {'class': 'text-truncate', 'style': 'max-width:360px;'}, 'text': job.get('message', '') or '-'},
             ])
-        history_lines = []
+
+        history_items = []
         for item in recent_history:
             if not isinstance(item, dict):
                 continue
-            icon = item.get("result") or self._auto_reply_status_label(item)
-            history_lines.append({
+            status = item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
+            label = item.get("result") or self._auto_reply_status_label(item)
+            title = str(item.get("title") or "").strip()
+            reason = str(item.get("reason") or item.get("message") or "-").strip()
+            meta = f"{item.get('time', '-')}｜{item.get('account', '-')}"
+            if item.get("fid") or item.get("tid"):
+                meta += f"｜fid:{item.get('fid') or '-'} tid:{item.get('tid') or '-'}"
+            history_items.append({
                 'component': 'div',
-                'props': {'class': 'text-caption text-medium-emphasis text-truncate'},
-                'text': f"{item.get('time', '-')} {item.get('account', '-')} {icon}：{item.get('reason') or item.get('message', '-')}",
+                'props': {'style': 'border:1px solid rgba(0,0,0,.06);border-radius:10px;padding:8px 10px;margin-top:8px;'},
+                'content': [
+                    {'component': 'div', 'props': {'class': 'd-flex align-center ga-2 mb-1'}, 'content': [
+                        status_chip(status),
+                        {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis text-truncate'}, 'text': meta},
+                    ]},
+                    {'component': 'div', 'props': {'class': 'text-body-2 text-truncate'}, 'text': title or reason},
+                    {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis text-truncate'}, 'text': f"{label}：{reason}"},
+                ]
             })
+
+        plan_text = f"版块：{','.join(plan.get('forum_ids') or []) or '-'}｜窗口：{plan.get('window_start') or '-'}-{plan.get('window_end') or '-'}｜{plan.get('message') or '今日计划'}"
         content = [
-            {'component': 'VCardTitle', 'props': {'class': 'text-subtitle-1 py-2'}, 'text': '自动回帖'},
-            {'component': 'VCardText', 'props': {'class': 'pt-0'}, 'content': [
-                {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis mb-2'}, 'text': f"版块：{','.join(plan.get('forum_ids') or []) or '-'}｜窗口：{plan.get('window_start') or '-'}-{plan.get('window_end') or '-'}｜{plan.get('message') or '今日计划'}"},
+            {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                {'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-2'}, 'content': [
+                    {'component': 'div', 'props': {'class': 'd-flex align-center'}, 'content': [
+                        {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-message-reply-text-outline'},
+                        {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '自动回帖'},
+                    ]},
+                    {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': 'primary'}, 'text': f"计划 {len(jobs)}"},
+                ]},
+                {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': plan_text},
             ]},
         ]
         if rows:
             content.append({
                 'component': 'VTable',
-                'props': {'density': 'compact', 'hover': True},
+                'props': {'density': 'compact', 'hover': True, 'class': 'px-2'},
                 'content': [
                     {'component': 'thead', 'content': [{'component': 'tr', 'content': [
                         {'component': 'th', 'text': '账号'}, {'component': 'th', 'text': '时间'},
@@ -3206,11 +3290,11 @@ class SehuatangSignin(_PluginBase):
                     {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in rows]},
                 ]
             })
-        if history_lines:
-            content.append({'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': history_lines})
+        if history_items:
+            content.append({'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': history_items})
         return {
             'component': 'VCard',
-            'props': {'variant': 'flat', 'class': 'mb-3'},
+            'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:14px;'},
             'content': content,
         }
 
@@ -3766,12 +3850,21 @@ class SehuatangSignin(_PluginBase):
         self.save_data(self._money_history_key, history)
 
     def _save_results(self, results: list):
-        """Save all results to plugin data."""
+        """Save all results to plugin data (one record per account per day)."""
         history = self.get_data(self._history_key) or []
+        if not isinstance(history, list):
+            history = []
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
         for r in results:
+            account_id = r.get("account", "?")
+            history = [
+                item for item in history
+                if not (isinstance(item, dict) and item.get("account") == account_id and str(item.get("time", "")).startswith(today))
+            ]
             history.insert(0, {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "account": r.get("account", "?"),
+                "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "account": account_id,
                 "success": r.get("success", False),
                 "message": r.get("message", ""),
             })
