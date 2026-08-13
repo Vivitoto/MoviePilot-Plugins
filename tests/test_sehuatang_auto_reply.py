@@ -152,6 +152,10 @@ def _load_plugin_module_with_stubs() -> types.ModuleType:
         setattr(captcha_server, name, noop)
     captcha_server.fs_create_session = lambda: "fs-test"
     captcha_server.fs_destroy_session = noop
+    captcha_server.fs_browser_session_start = lambda *args, **kwargs: False
+    captcha_server.fs_browser_session_destroy = noop
+    captcha_server.fs_browser_session_get_text = lambda *args, **kwargs: ""
+    captcha_server.fs_browser_session_post = lambda *args, **kwargs: {"html": ""}
     captcha_server.fs_browser_get_text = lambda *args, **kwargs: ""
     captcha_server.fs_browser_post = lambda *args, **kwargs: {"html": ""}
     captcha_server.fs_get = lambda *args, **kwargs: ""
@@ -195,9 +199,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.3"', source)
-        self.assertEqual(sehuatang["version"], "1.1.3")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.3"])
+        self.assertIn('plugin_version = "1.1.4"', source)
+        self.assertEqual(sehuatang["version"], "1.1.4")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.4"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -338,7 +342,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             })
             return detail
 
-        def fake_submit(fs_sid, cookies, detail, reply):
+        def fake_submit(fs_sid, cookies, detail, reply, **kwargs):
             submit_saw_browser_cookie.append(any(c.get("name") == "gate_passed" for c in cookies))
             return plugin._auto_reply_result("success", "回帖成功")
 
@@ -400,7 +404,13 @@ class SehuatangAutoReplyTest(unittest.TestCase):
                 f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=166",
             ],
         )
-        self.assertEqual(fs_get_calls, [])
+        self.assertEqual(
+            fs_get_calls,
+            [
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=166",
+            ],
+        )
         self.assertEqual(plugin._auto_reply_status_label(result), "失败")
         plugin._notify_auto_reply_result("account-a", result)
         self.assertEqual(plugin.messages[-1]["title"], "98自动回帖失败")
@@ -479,7 +489,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertEqual(result["status"], "skipped")
         self.assertIn("AI 评估未通过", result["reason"])
         self.assertNotIn("安全页/权限页", result["reason"])
-        self.assertEqual(fs_get_calls, [])
+        self.assertEqual(fs_get_calls, [f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141"])
 
     def test_detail_page_uses_browser_primary_before_hard_filtering(self):
         plugin_module = _load_plugin_module_with_stubs()

@@ -1429,6 +1429,7 @@ def _create_browser_state(session_key: str, fs_sid: str, cookies: list) -> dict 
             page = context.new_page()
             page.set_default_timeout(10000)
             page.goto(f"{BASE_URL}/plugin.php?id=dd_sign", wait_until="domcontentloaded", timeout=12000)
+            _settle_browser_gate(page, engine)
             try:
                 if _is_cf_challenge_html(page.content()):
                     settle = max(0.0, min(6.0, float(os.environ.get("SEHUATANG_BROWSER_CHECK_CF_SETTLE_SECONDS", "4"))))
@@ -1505,6 +1506,85 @@ def _browser_fetch_text(session_key: str, method: str, url: str, body: str | Non
         return {"status": response.get("status"), "text": response.get("text") or "", "via": state.get("engine") or "browser"}
     except Exception as e:
         return {"error": str(e), "via": state.get("engine") or "browser"}
+
+
+def fs_browser_session_start(session_key: str, fs_sid: str, cookies: list) -> bool:
+    """Start the same persistent browser state used by the manual sign-in flow."""
+    state = _create_browser_state(session_key, fs_sid, cookies)
+    return state is not None
+
+
+def fs_browser_session_destroy(session_key: str | None):
+    """Close a persistent browser state created for sign-in or auto-reply."""
+    destroy_browser_session(session_key)
+
+
+def fs_browser_session_get_text(session_key: str, url: str, cookies: list,
+                                wait_seconds: float | None = None) -> str:
+    """Open a page in the persistent browser, settle/click safety gates, and return HTML."""
+    state = _get_browser_state(session_key)
+    if not state or not state.get("page"):
+        return ""
+    page = state["page"]
+    engine = state.get("engine") or "browser"
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        _settle_browser_gate(page, engine, wait_seconds=wait_seconds)
+        html = page.content()
+        _merge_state_cookies(session_key, cookies)
+        return html or ""
+    except Exception as e:
+        logger.warning(f"[SehuatangCaptcha] Persistent browser GET failed via {engine}: {e}")
+        _merge_state_cookies(session_key, cookies)
+        return ""
+
+
+def fs_browser_session_post(session_key: str, url: str, body: str, cookies: list,
+                            headers: dict | None = None, referer_url: str | None = None) -> dict:
+    """Submit a form/XHR in the persistent browser state and merge cookies."""
+    state = _get_browser_state(session_key)
+    if not state or not state.get("page"):
+        return {"html": "", "text": "", "error": "browser_session_missing", "via": "browser"}
+    safe_headers = {}
+    for key, value in (headers or {}).items():
+        header = str(key)
+        if header.lower() in {"accept", "content-type", "x-requested-with"} and value:
+            safe_headers[header] = str(value)
+    safe_headers.setdefault("Accept", "*/*")
+    safe_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    referrer = str(referer_url or (headers or {}).get("Referer") or BASE_URL)
+    if not referrer.startswith(BASE_URL):
+        referrer = BASE_URL
+    try:
+        response = state["page"].evaluate(
+            """
+            async ({ url, body, headers, referrer }) => {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers,
+                    body,
+                    credentials: 'include',
+                    cache: 'no-store',
+                    referrer
+                });
+                return {status: resp.status, text: await resp.text(), url: resp.url};
+            }
+            """,
+            {"url": url, "body": body, "headers": safe_headers, "referrer": referrer},
+        )
+        _merge_state_cookies(session_key, cookies)
+        html = response.get("text") or ""
+        return {
+            "html": html,
+            "text": html,
+            "status": response.get("status"),
+            "url": response.get("url"),
+            "via": state.get("engine") or "browser",
+        }
+    except Exception as e:
+        logger.warning(f"[SehuatangCaptcha] Persistent browser POST failed via {state.get('engine') or 'browser'}: {e}")
+        _merge_state_cookies(session_key, cookies)
+        return {"html": "", "text": "", "error": str(e), "via": state.get("engine") or "browser"}
 
 
 def _json_from_html_or_text(text: str) -> dict:

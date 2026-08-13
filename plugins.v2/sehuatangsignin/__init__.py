@@ -35,6 +35,10 @@ from .captcha_server import (
     fetch_captcha_for_account,
     fs_browser_get_text,
     fs_browser_post,
+    fs_browser_session_destroy,
+    fs_browser_session_get_text,
+    fs_browser_session_post,
+    fs_browser_session_start,
     fs_create_session,
     fs_destroy_session,
     fs_get,
@@ -60,7 +64,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.3"
+    plugin_version = "1.1.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1088,6 +1092,7 @@ class SehuatangSignin(_PluginBase):
 
     def _auto_reply_single(self, account: dict, account_id: str, forum_ids: List[str]) -> Dict[str, Any]:
         fs_sid = ""
+        browser_session_key = ""
         request_state = {"requested": False}
         try:
             cookies = self._build_cookies(account)
@@ -1095,6 +1100,17 @@ class SehuatangSignin(_PluginBase):
             if not fs_sid:
                 logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖失败：FS 会话创建失败")
                 return self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")
+
+            browser_session_key = f"auto-reply-{account_id}-{uuid.uuid4().hex[:8]}"
+            try:
+                if fs_browser_session_start(browser_session_key, fs_sid, cookies):
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖已创建持久浏览器会话：{browser_session_key}")
+                else:
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖持久浏览器会话不可用，降级为短浏览器/FS 请求")
+                    browser_session_key = ""
+            except Exception as e:
+                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖持久浏览器会话创建失败，降级为短浏览器/FS 请求：{e}")
+                browser_session_key = ""
 
             all_candidates = []
             seen_tids = set()
@@ -1109,6 +1125,7 @@ class SehuatangSignin(_PluginBase):
                     request_state,
                     account_id,
                     f"版块 {fid}",
+                    browser_session_key=browser_session_key,
                 )
                 if self._is_auto_reply_blocked_page(html):
                     logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖版块 {fid} 被安全页/权限页拦截")
@@ -1151,6 +1168,7 @@ class SehuatangSignin(_PluginBase):
                     request_state,
                     account_id,
                     f"详情 {tid}",
+                    browser_session_key=browser_session_key,
                 )
                 detail = self._extract_auto_reply_thread_detail(detail_html, candidate, forum_ids)
                 ok, reason = self._hard_filter_auto_reply_candidate(
@@ -1212,7 +1230,7 @@ class SehuatangSignin(_PluginBase):
                     f"fid={detail.get('fid') or '-'} tid={tid} "
                     f"标题={detail.get('title') or '-'} 回复={reply}"
                 )
-                post_result = self._submit_auto_reply(fs_sid, cookies, detail, reply)
+                post_result = self._submit_auto_reply(fs_sid, cookies, detail, reply, browser_session_key=browser_session_key)
                 result = self._auto_reply_result(
                     self._auto_reply_result_status(post_result),
                     post_result.get("reason") or post_result.get("message") or
@@ -1232,6 +1250,8 @@ class SehuatangSignin(_PluginBase):
             logger.error(f"[SehuatangSignin] [{account_id}] 自动回帖异常：{traceback.format_exc()}")
             return self._auto_reply_result("failed", f"异常：{str(e)}")
         finally:
+            if browser_session_key:
+                fs_browser_session_destroy(browser_session_key)
             if fs_sid:
                 fs_destroy_session(fs_sid)
 
@@ -1248,23 +1268,57 @@ class SehuatangSignin(_PluginBase):
 
     def _auto_reply_browser_primary_get(self, fs_sid: str, url: str, cookies: list,
                                         request_state: Dict[str, Any],
-                                        account_id: str = "", page_label: str = "") -> str:
+                                        account_id: str = "", page_label: str = "",
+                                        browser_session_key: str = "") -> str:
         label = page_label or "页面"
+        self._auto_reply_pace_request(request_state)
+
+        if browser_session_key:
+            try:
+                html = fs_browser_session_get_text(browser_session_key, url, cookies)
+            except Exception as e:
+                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器获取失败：{e}")
+            else:
+                if str(html or "").strip():
+                    if self._is_auto_reply_blocked_page(html):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器返回安全页/权限页，重试一次")
+                        try:
+                            retry_html = fs_browser_session_get_text(browser_session_key, url, cookies, wait_seconds=6)
+                        except Exception as e:
+                            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器重试失败：{e}")
+                        else:
+                            if str(retry_html or "").strip():
+                                html = retry_html
+                        if self._is_auto_reply_blocked_page(html):
+                            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器重试后仍为安全页/权限页，改用短浏览器/FS 备用")
+                        else:
+                            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取")
+                            return html
+                    else:
+                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过持久浏览器获取")
+                        return html
+                else:
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}持久浏览器未返回页面，改用短浏览器/FS 备用")
+
+        blocked_html = ""
         try:
-            self._auto_reply_pace_request(request_state)
             html = fs_browser_get_text(fs_sid, url, cookies)
         except Exception as e:
-            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器优先获取失败：{e}")
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器获取失败：{e}")
         else:
             if str(html or "").strip():
                 if self._is_auto_reply_blocked_page(html):
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器返回安全页/权限页")
+                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器返回安全页/权限页，改用 FS GET 备用")
+                    blocked_html = html
                 else:
-                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过浏览器获取")
-                return html
-            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}浏览器未返回页面，改用 FS GET 备用")
+                    logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖{label}已通过短浏览器获取")
+                    return html
+            else:
+                logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}短浏览器未返回页面，改用 FS GET 备用")
 
         html = fs_get(fs_sid, url, cookies)
+        if not str(html or "").strip() and self._is_auto_reply_blocked_page(blocked_html):
+            html = blocked_html
         if self._is_auto_reply_blocked_page(html):
             logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖{label}FS GET 备用后仍为安全页/权限页")
         elif str(html or "").strip():
@@ -2524,7 +2578,8 @@ class SehuatangSignin(_PluginBase):
                 return None, "照抄参考模板"
         return reply, ""
 
-    def _submit_auto_reply(self, fs_sid: str, cookies: list, detail: Dict[str, Any], reply: str) -> Dict[str, Any]:
+    def _submit_auto_reply(self, fs_sid: str, cookies: list, detail: Dict[str, Any], reply: str,
+                           browser_session_key: str = "") -> Dict[str, Any]:
         fid = str(detail.get("fid") or "")
         tid = str(detail.get("tid") or "")
         formhash = str(detail.get("formhash") or "")
@@ -2547,6 +2602,23 @@ class SehuatangSignin(_PluginBase):
             "Origin": self._base_url,
         }
         response: Dict[str, Any] = {}
+        if browser_session_key:
+            try:
+                response = fs_browser_session_post(
+                    browser_session_key,
+                    post_url,
+                    post_data,
+                    cookies,
+                    headers=headers,
+                    referer_url=headers["Referer"],
+                )
+            except Exception as e:
+                logger.warning(f"[SehuatangSignin] 自动回帖持久浏览器 POST 失败，改用短浏览器/FS request.post 备用：{e}")
+            else:
+                if str((response or {}).get("html") or "").strip():
+                    logger.info(f"[SehuatangSignin] 自动回帖已通过持久浏览器 POST 提交，via={response.get('via') or 'browser'}")
+                    return self._parse_auto_reply_post_result(response.get("html", ""))
+                logger.warning("[SehuatangSignin] 自动回帖持久浏览器 POST 未返回页面，改用短浏览器/FS request.post 备用")
         try:
             response = fs_browser_post(
                 fs_sid,
