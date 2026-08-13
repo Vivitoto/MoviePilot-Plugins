@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1293,18 +1293,54 @@ class SehuatangSignin(_PluginBase):
                 names.append(str(item.get("name")))
         return sorted(set(names))
 
+    @staticmethod
+    def _auto_reply_block_markers(html_text: str) -> List[str]:
+        text = str(html_text or "")
+        low = text.lower()
+        marker_checks = [
+            ("safe_gate_js", "static/safe/js/web.js"),
+            ("safeid", "safeid="),
+            ("safe_gate_enter_btn", "enter-btn"),
+            ("safe_gate_verify", "请完成安全验证"),
+            ("safe_gate_check", "安全检查"),
+            ("rate_limited", "访问过于频繁"),
+            ("cloudflare_cf_challenge", "cf-challenge"),
+            ("cloudflare_cf_turnstile", "cf-turnstile"),
+            ("cloudflare_browser_verification", "cf-browser-verification"),
+            ("cloudflare_cf_chl_opt", "_cf_chl_opt"),
+            ("cloudflare_cf_chl", "cf_chl_"),
+            ("cloudflare_challenge_error_text", "challenge-error-text"),
+            ("cloudflare_js_cookies", "enable javascript and cookies to continue"),
+            ("cloudflare_just_a_moment", "just a moment"),
+            ("permission_denied", "您没有权限"),
+            ("permission_denied", "抱歉，您没有权限"),
+            ("permission_denied", "无权访问"),
+            ("login_required", "需要登录"),
+            ("missing_thread", "抱歉，指定的主题不存在"),
+        ]
+        markers = []
+        seen = set()
+        for name, marker in marker_checks:
+            if marker.lower() in low and name not in seen:
+                if name == "cloudflare_cf_chl" and "cloudflare_cf_chl_opt" in seen:
+                    continue
+                markers.append(name)
+                seen.add(name)
+        return markers
+
     @classmethod
     def _auto_reply_page_classes(cls, html_text: str) -> List[str]:
         text = str(html_text or "")
         low = text.lower()
+        block_markers = cls._auto_reply_block_markers(text)
         classes = []
-        if any(marker in low for marker in ("static/safe/js/web.js", "safeid=", "enter-btn", "请完成安全验证", "安全检查")):
+        if any(marker.startswith("safe_gate") or marker in {"safeid", "rate_limited"} for marker in block_markers):
             classes.append("safe_gate")
-        if any(marker in low for marker in ("cf-challenge", "cf-turnstile", "challenge-platform", "cloudflare", "just a moment")):
+        if any(marker.startswith("cloudflare_") for marker in block_markers):
             classes.append("cloudflare")
-        if any(marker in low for marker in ("您没有权限", "抱歉，您没有权限", "无权访问")):
+        if "permission_denied" in block_markers:
             classes.append("permission")
-        if any(marker in low for marker in ("需要登录",)):
+        if "login_required" in block_markers:
             classes.append("login_required")
         if any(marker in low for marker in ("forum.php?mod=viewthread", "threadlist", "normalthread")):
             classes.append("forum")
@@ -1317,7 +1353,11 @@ class SehuatangSignin(_PluginBase):
     @classmethod
     def _auto_reply_page_diag(cls, html_text: str) -> str:
         text = str(html_text or "")
-        return f"len={len(text)}, class={','.join(cls._auto_reply_page_classes(text))}"
+        diag = f"len={len(text)}, class={','.join(cls._auto_reply_page_classes(text))}"
+        block_markers = cls._auto_reply_block_markers(text)
+        if block_markers:
+            diag = f"{diag}, blocked={','.join(block_markers)}"
+        return diag
 
     def _auto_reply_browser_primary_get(self, fs_sid: str, url: str, cookies: list,
                                         request_state: Dict[str, Any],
@@ -2046,27 +2086,9 @@ class SehuatangSignin(_PluginBase):
         )
         return bool(has_message_box and has_reply_submit)
 
-    @staticmethod
-    def _is_auto_reply_blocked_page(html_text: str) -> bool:
-        text = html_text or ""
-        markers = [
-            "static/safe/js/web.js",
-            "safeid=",
-            "enter-btn",
-            "cf-challenge",
-            "cf-turnstile",
-            "challenge-platform",
-            "cf-browser-verification",
-            "Cloudflare",
-            "Just a moment",
-            "请完成安全验证",
-            "安全检查",
-            "访问过于频繁",
-            "您没有权限",
-            "需要登录",
-            "抱歉，指定的主题不存在",
-        ]
-        return any(marker.lower() in text.lower() for marker in markers)
+    @classmethod
+    def _is_auto_reply_blocked_page(cls, html_text: str) -> bool:
+        return bool(cls._auto_reply_block_markers(html_text))
 
     @staticmethod
     def _is_auto_reply_sticky_context(html_text: str) -> bool:

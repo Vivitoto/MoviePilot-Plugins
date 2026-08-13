@@ -199,9 +199,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.6"', source)
-        self.assertEqual(sehuatang["version"], "1.1.6")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.6"])
+        self.assertIn('plugin_version = "1.1.7"', source)
+        self.assertEqual(sehuatang["version"], "1.1.7")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.7"])
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -241,6 +241,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             "_parse_forum_ids",
             "_parse_line_list",
             "_extract_thread_candidates",
+            "_auto_reply_block_markers",
             "_parse_auto_reply_thread_time",
             "_extract_auto_reply_time_metadata",
             "_sort_auto_reply_candidates_by_newness",
@@ -326,6 +327,31 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertEqual(plugin._auto_reply_page_classes('<html>safeid=abc static/safe/js/web.js</html>'), ["safe_gate"])
         self.assertIn("forum", plugin._auto_reply_page_classes('<a href="forum.php?mod=viewthread&tid=1">x</a><div id="threadlist"></div>'))
         self.assertIn("thread", plugin._auto_reply_page_classes('<div id="thread_subject">t</div><textarea id="fastpostmessage"></textarea>'))
+        normal_with_cloudflare_asset = '<html><footer>Cloudflare</footer><a href="forum.php?mod=viewthread&tid=1">x</a><div id="threadlist"></div><textarea id="fastpostmessage"></textarea></html>'
+        normal_classes = plugin._auto_reply_page_classes(normal_with_cloudflare_asset)
+        normal_diag = plugin._auto_reply_page_diag(normal_with_cloudflare_asset)
+        self.assertIn("forum", normal_classes)
+        self.assertIn("thread", normal_classes)
+        self.assertNotIn("cloudflare", normal_classes)
+        self.assertFalse(plugin._is_auto_reply_blocked_page(normal_with_cloudflare_asset))
+        self.assertEqual(plugin._auto_reply_block_markers(normal_with_cloudflare_asset), [])
+        self.assertNotIn("blocked=", normal_diag)
+        weak_challenge_platform_html = '<html><script src="/cdn-cgi/challenge-platform/foo.js"></script><a href="forum.php?mod=viewthread&tid=1">x</a><div id="threadlist"></div><textarea id="fastpostmessage"></textarea></html>'
+        weak_classes = plugin._auto_reply_page_classes(weak_challenge_platform_html)
+        self.assertIn("forum", weak_classes)
+        self.assertIn("thread", weak_classes)
+        self.assertNotIn("cloudflare", weak_classes)
+        self.assertFalse(plugin._is_auto_reply_blocked_page(weak_challenge_platform_html))
+        self.assertEqual(plugin._auto_reply_block_markers(weak_challenge_platform_html), [])
+        self.assertNotIn("blocked=", plugin._auto_reply_page_diag(weak_challenge_platform_html))
+        challenge_html = '<html>_cf_chl_opt cf-challenge Just a moment</html>'
+        challenge_markers = plugin._auto_reply_block_markers(challenge_html)
+        challenge_diag = plugin._auto_reply_page_diag(challenge_html)
+        self.assertTrue(plugin._is_auto_reply_blocked_page(challenge_html))
+        self.assertIn("cloudflare_cf_challenge", challenge_markers)
+        self.assertIn("cloudflare_cf_chl_opt", challenge_markers)
+        self.assertIn("cloudflare_just_a_moment", challenge_markers)
+        self.assertIn("blocked=cloudflare_cf_challenge,cloudflare_cf_chl_opt,cloudflare_just_a_moment", challenge_diag)
         diag = plugin._auto_reply_page_diag('<div id="thread_subject">t</div>')
         self.assertIn("len=", diag)
         self.assertIn("thread", diag)
@@ -635,7 +661,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_hard_filters_admin_access_and_contact_posts_locally(self):
         source = _source()
         hard_filter_body = _method_source(source, "_hard_filter_auto_reply_candidate")
-        blocked_page_body = _method_source(source, "_is_auto_reply_blocked_page")
+        blocked_markers_body = _method_source(source, "_auto_reply_block_markers")
         contact_body = _method_source(source, "_has_auto_reply_contact_or_diversion_text")
         author_body = _method_source(source, "_extract_auto_reply_post_authors")
         logged_in_body = _method_source(source, "_extract_auto_reply_logged_in_identity")
@@ -658,8 +684,11 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         ]:
             self.assertIn(f'"{keyword}"', hard_filter_body)
 
-        for marker in ["cf-challenge", "cf-turnstile", "challenge-platform", "Just a moment", "请完成安全验证", "访问过于频繁"]:
-            self.assertIn(f'"{marker}"', blocked_page_body)
+        for marker in ["cf-challenge", "cf-turnstile", "just a moment", "请完成安全验证", "访问过于频繁"]:
+            self.assertIn(f'"{marker}"', blocked_markers_body)
+        self.assertNotIn('"challenge-platform"', blocked_markers_body)
+        self.assertIn("_auto_reply_block_markers(html_text)", _method_source(source, "_is_auto_reply_blocked_page"))
+        self.assertNotIn('"cloudflare"', blocked_markers_body)
         for marker in ["加群", "私信", "联系方式", "站外", "外站", "最新地址", "备用网址", "访问方法"]:
             self.assertIn(marker, contact_body)
         for marker in ["telegram", "tg群", "vx", "防失联", "永久地址"]:
