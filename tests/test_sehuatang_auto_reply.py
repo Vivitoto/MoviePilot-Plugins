@@ -285,6 +285,47 @@ def _plugin_with_auto_reply_ui_data():
             "reason": "",
             "reply_summary": "",
         },
+        {
+            "time": f"{today} 09:22:00",
+            "date": today,
+            "account": "epsilon",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "892",
+            "title": "[ED2K｜原档合集] 天音るな DM...\n回帖成功 / 回复：这反差设定挺有意思",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:20:00",
+            "date": today,
+            "account": "gamma",
+            "success": False,
+            "failed": True,
+            "status": "failed",
+            "result": "失败",
+            "fid": "166",
+            "tid": "890",
+            "title": "失败主题",
+            "reason": "AI 未返回合格短回复",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:15:00",
+            "date": today,
+            "account": "delta",
+            "success": False,
+            "skipped": True,
+            "status": "skipped",
+            "result": "跳过",
+            "fid": "166",
+            "tid": "891",
+            "title": "跳过主题",
+            "reason": "提交前安全复核未通过",
+            "reply_summary": "",
+        },
     ]
     plugin.data_store[plugin._history_key] = [
         {
@@ -304,9 +345,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.1"', source)
-        self.assertEqual(sehuatang["version"], "1.2.1")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.1"])
+        self.assertIn('plugin_version = "1.2.2"', source)
+        self.assertEqual(sehuatang["version"], "1.2.2")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.2"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -368,12 +409,30 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         table = tables[0]
         table_text = _schema_text(table)
 
-        for header in ["账号", "结果", "时间", "版块/主题", "标题", "原因/回复摘要"]:
+        for header in ["账号", "结果", "时间", "版块/主题", "标题", "回帖结果"]:
             self.assertIn(header, table_text)
+        self.assertNotIn("回复结果", table_text)
+        self.assertNotIn("原因", table_text)
+        self.assertNotIn("回复摘要", table_text)
+        self.assertNotIn("原因/回复摘要", table_text)
         self.assertIn("auto-reply-detail-table", str(table.get("props") or {}))
         self.assertIn("table-layout:fixed", str(table.get("props") or {}))
         td_props = [str(node.get("props") or {}) for node in _nodes_by_component(table, "td")]
         self.assertTrue(any("max-width" in props and "text-overflow:ellipsis" in props for props in td_props))
+
+    def test_auto_reply_detail_distinguishes_specific_reply_results(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        table = _nodes_by_component(auto_reply_card, "VTable")[0]
+        table_text = _schema_text(table)
+
+        self.assertIn("回帖成功", table_text)
+        self.assertIn("AI 未返回合格短回复", table_text)
+        self.assertIn("提交前安全复核未通过", table_text)
+        self.assertIn("回帖成功。感谢分享", table_text)
+        self.assertIn("回帖失败。AI 未返回合格短回复", table_text)
+        self.assertIn("回帖失败。提交前安全复核未通过", table_text)
 
     def test_auto_reply_detail_repairs_polluted_title_for_display(self):
         plugin = _plugin_with_auto_reply_ui_data()
@@ -387,7 +446,15 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         cells = _nodes_by_component(beta_row, "td")
 
         self.assertEqual(cells[4].get("text"), "-")
-        self.assertEqual(cells[5].get("text"), "回帖成功 / 回复：谢谢楼主")
+        self.assertEqual(cells[5].get("text"), "回帖成功。谢谢楼主")
+
+        epsilon_row = next(
+            row for row in _nodes_by_component(table, "tr")
+            if "epsilon" in _schema_text(row)
+        )
+        epsilon_cells = _nodes_by_component(epsilon_row, "td")
+        self.assertEqual(epsilon_cells[4].get("text"), "[ED2K｜原档合集] 天音るな DM...")
+        self.assertEqual(epsilon_cells[5].get("text"), "回帖成功。这反差设定挺有意思")
 
     def test_signin_history_is_collapsible_by_default(self):
         plugin = _plugin_with_auto_reply_ui_data()
@@ -1393,10 +1460,11 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             '"status": status',
             '"result_status": status',
             '"result_category": status',
-            '"result": self._auto_reply_status_label(status)',
+            '"result": reason or self._auto_reply_status_label(status)',
             '"reason": reason',
         ]:
             self.assertIn(token, record_body)
+        self.assertIn("history[:50]", record_body)
         self.assertIn('"done" if result_status == "success" else result_status', run_body)
 
         self.assertIn('self._auto_reply_result("failed", "无法创建 FlareSolverr 会话")', auto_body)

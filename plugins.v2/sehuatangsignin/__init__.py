@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.1"
+    plugin_version = "1.2.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -3137,7 +3137,7 @@ class SehuatangSignin(_PluginBase):
             "status": status,
             "result_status": status,
             "result_category": status,
-            "result": self._auto_reply_status_label(status),
+            "result": reason or self._auto_reply_status_label(status),
             "fid": str(result.get("fid") or ""),
             "tid": str(result.get("tid") or ""),
             "title": str(result.get("title") or "")[:160],
@@ -3146,7 +3146,7 @@ class SehuatangSignin(_PluginBase):
             "reply_summary": str(result.get("reply_summary") or "")[:60],
             "risk_reasons": result.get("risk_reasons") or [],
         })
-        self.save_data(self._auto_reply_history_key, history[:100])
+        self.save_data(self._auto_reply_history_key, history[:50])
         if status == "success":
             self._mark_auto_reply_success_for_day(account_id, result)
 
@@ -3318,8 +3318,8 @@ class SehuatangSignin(_PluginBase):
                 style += "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
             return {'component': 'td', 'props': {'class': 'text-truncate', 'style': style, 'title': raw_text}, 'text': raw_text}
 
-        def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str]:
-            """Return title and reason/reply display text, repairing older polluted title rows."""
+        def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str, str]:
+            """Return title, reason and reply display text, repairing older polluted title rows."""
             title = str(item.get("title") or "").strip()
             reason = str(item.get("reason") or item.get("message") or "-").strip()
             reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
@@ -3340,7 +3340,7 @@ class SehuatangSignin(_PluginBase):
                         reply_summary = title[marker_index + len(marker):].strip()
                     if not reason or reason == "-":
                         reason = prefix
-                    title = title[:marker_index].strip(" -/｜|，,；;") or "-"
+                    title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip() or "-"
                     break
                 if title == prefix:
                     if not reason or reason == "-":
@@ -3348,25 +3348,28 @@ class SehuatangSignin(_PluginBase):
                     title = "-"
                     break
 
-            reason_reply = reason or "-"
-            if reply_summary:
-                reason_reply = f"{reason_reply} / 回复：{reply_summary}" if reason_reply != "-" else f"回复：{reply_summary}"
-            return title or "-", reason_reply
+            return title or "-", reason or "-", reply_summary or "-"
+
+        def auto_reply_result_text(item: Dict[str, Any], reason: str, reply_summary: str) -> str:
+            status = self._auto_reply_result_status(item)
+            if status == "success":
+                return f"回帖成功。{reply_summary}" if reply_summary and reply_summary != "-" else "回帖成功"
+            reason = reason if reason and reason != "-" else str(item.get("reason") or item.get("message") or "").strip()
+            return f"回帖失败。{reason}" if reason else "回帖失败"
 
         detail_rows = []
         for item in recent_history:
             if not isinstance(item, dict):
                 continue
-            status = item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
-            title, reason_reply = auto_reply_display_fields(item)
+            title, reason_text, reply_summary = auto_reply_display_fields(item)
             forum_topic = f"fid:{item.get('fid') or '-'} / tid:{item.get('tid') or '-'}"
             detail_rows.append([
                 truncate_cell(item.get('account', '-'), 120, nowrap=True),
-                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(status)]},
+                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(self._auto_reply_result_status(item))]},
                 truncate_cell(item.get('time', '-'), 170, nowrap=True),
                 truncate_cell(forum_topic, 140, nowrap=True),
                 truncate_cell(title, 260),
-                truncate_cell(reason_reply, 360),
+                truncate_cell(auto_reply_result_text(item, reason_text, reply_summary), 360),
             ])
 
         for job in today_jobs[:20]:
@@ -3407,7 +3410,7 @@ class SehuatangSignin(_PluginBase):
         if detail_rows:
             detail_table = {
                 'component': 'VTable',
-                'props': {'density': 'compact', 'hover': True, 'class': 'auto-reply-detail-table', 'style': 'min-width:920px;table-layout:fixed;'},
+                'props': {'density': 'compact', 'hover': True, 'class': 'auto-reply-detail-table', 'style': 'min-width:980px;table-layout:fixed;'},
                 'content': [
                     {'component': 'thead', 'content': [{'component': 'tr', 'content': [
                         {'component': 'th', 'props': {'style': 'width:120px;'}, 'text': '账号'},
@@ -3415,7 +3418,7 @@ class SehuatangSignin(_PluginBase):
                         {'component': 'th', 'props': {'style': 'width:170px;'}, 'text': '时间'},
                         {'component': 'th', 'props': {'style': 'width:140px;'}, 'text': '版块/主题'},
                         {'component': 'th', 'props': {'style': 'width:260px;'}, 'text': '标题'},
-                        {'component': 'th', 'props': {'style': 'width:360px;'}, 'text': '原因/回复摘要'},
+                        {'component': 'th', 'props': {'style': 'width:360px;'}, 'text': '回帖结果'},
                     ]}]},
                     {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in detail_rows]},
                 ],

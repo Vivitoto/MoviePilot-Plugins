@@ -69,17 +69,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.2.1",
+        "version": "1.2.2",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.2.2": "修复自动回帖记录展示：前几列保持原样，标题列只保留主题标题，最后一列改为回帖结果；成功显示回帖成功及回复内容，失败显示回帖失败及失败原因。",
             "v1.2.1": "修复详情页折叠体验：去掉回帖详情与签到记录折叠标题左侧多余箭头，签到记录默认折叠；修正回帖详情表格中标题与原因/回复摘要混排的问题，并兼容旧记录显示。",
             "v1.2.0": "优化详情页与配置页 UI：账号状态前移，自动回帖卡片显示统计并可展开表格详情；配置页简要提示需先在 MoviePilot 设定-系统-智能助手配置中配置大语言模型。",
             "v1.1.9": "整理配置分组（共用访问配置/手动签到/自动回帖），自动回帖新增可自定义通知模板（支持 {account}{result}{reason}{fid}{tid}{title}{reply}{time} 变量）；详情页自动回帖与手动签到记录改为每天每账号一条，新结果覆盖旧的。",
             "v1.1.8": "优化 98 自动回帖风险过滤：普通外链和 magnet/ed2k/thunder/ftp/http 下载协议、网盘及网盘相关中文关键词均不再单独触发硬跳过；仅保留联系方式、群组、短链/跳转引流、诈骗和规则管理类风险拦截，并新增已跳过主题缓存以减少重复硬过滤和 AI 评估。",
-            "v1.1.7": "修复 98 自动回帖阻断页判定与诊断：不再仅因普通 Cloudflare 字样判为挑战页；仅明确 Cloudflare challenge、safe gate、权限/登录等硬标记才阻断，并在日志诊断中输出 blocked marker，避免 class=cloudflare,forum,thread 这类模糊标签误导排查。",
-            "v1.1.6": "修复 98 自动回帖版块/详情读取：确认 FlareSolverr 与 cloakbrowser 在携带代理与账号 Cookie 时可直读 141/166 与帖子页，移除 curl_cffi 备用依赖；强化 cloakbrowser 启动层代理传递，配置代理时不再无代理直连降级，并为自动回帖增加脱敏诊断日志。"
+            "v1.1.7": "修复 98 自动回帖阻断页判定与诊断：不再仅因普通 Cloudflare 字样判为挑战页；仅明确 Cloudflare challenge、safe gate、权限/登录等硬标记才阻断，并在日志诊断中输出 blocked marker，避免 class=cloudflare,forum,thread 这类模糊标签误导排查。"
         }
     },
     "WeWorkIPCB": {
