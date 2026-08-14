@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.0"
+    plugin_version = "1.2.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -594,25 +594,41 @@ class SehuatangSignin(_PluginBase):
                     {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': h.get('time', '-')},
                     {'component': 'td', 'props': {'class': 'text-truncate', 'style': 'max-width:420px;'}, 'text': h.get('message', '-')},
                 ])
+            signin_table = {
+                'component': 'VTable',
+                'props': {'density': 'compact', 'hover': True, 'class': 'signin-history-table', 'style': 'min-width:680px;'},
+                'content': [
+                    {'component': 'thead', 'content': [{'component': 'tr', 'content': [
+                        {'component': 'th', 'text': '账号'}, {'component': 'th', 'text': '结果'},
+                        {'component': 'th', 'text': '时间'}, {'component': 'th', 'text': '详情'},
+                    ]}]},
+                    {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in rows]},
+                ]
+            }
             page.append({
                 'component': 'VCard',
                 'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:14px;'},
                 'content': [
-                    {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                    {'component': 'VCardText', 'props': {'class': 'py-3 pb-2'}, 'content': [
                         {'component': 'div', 'props': {'class': 'd-flex align-center'}, 'content': [
                             {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-history'},
                             {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '签到记录'},
                         ]},
                     ]},
-                    {'component': 'VTable',
-                     'props': {'density': 'compact', 'hover': True, 'class': 'px-2'},
-                     'content': [
-                         {'component': 'thead', 'content': [{'component': 'tr', 'content': [
-                             {'component': 'th', 'text': '账号'}, {'component': 'th', 'text': '结果'},
-                             {'component': 'th', 'text': '时间'}, {'component': 'th', 'text': '详情'},
-                         ]}]},
-                         {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in rows]},
-                     ]}
+                    {'component': 'VExpansionPanels', 'props': {'variant': 'accordion', 'class': 'px-2 pb-3'}, 'content': [{
+                        'component': 'VExpansionPanel',
+                        'props': {'elevation': 0, 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:8px;'},
+                        'content': [
+                            {'component': 'VExpansionPanelTitle', 'props': {'class': 'text-body-2 font-weight-medium'}, 'content': [
+                                {'component': 'span', 'text': '查看签到记录'},
+                            ]},
+                            {'component': 'VExpansionPanelText', 'content': [{
+                                'component': 'div',
+                                'props': {'style': 'overflow-x:auto;'},
+                                'content': [signin_table],
+                            }]},
+                        ]
+                    }]}
                 ]
             })
 
@@ -3302,23 +3318,54 @@ class SehuatangSignin(_PluginBase):
                 style += "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
             return {'component': 'td', 'props': {'class': 'text-truncate', 'style': style, 'title': raw_text}, 'text': raw_text}
 
+        def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str]:
+            """Return title and reason/reply display text, repairing older polluted title rows."""
+            title = str(item.get("title") or "").strip()
+            reason = str(item.get("reason") or item.get("message") or "-").strip()
+            reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
+            status_label = self._auto_reply_status_label(
+                item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
+            )
+
+            polluted_prefixes = sorted(
+                [text for text in {reason, status_label, "回帖成功", "回复成功", "成功"} if text and text != "-"],
+                key=len,
+                reverse=True,
+            )
+            for prefix in polluted_prefixes:
+                marker = f"{prefix} / 回复："
+                marker_index = title.find(marker)
+                if marker_index >= 0:
+                    if not reply_summary:
+                        reply_summary = title[marker_index + len(marker):].strip()
+                    if not reason or reason == "-":
+                        reason = prefix
+                    title = title[:marker_index].strip(" -/｜|，,；;") or "-"
+                    break
+                if title == prefix:
+                    if not reason or reason == "-":
+                        reason = prefix
+                    title = "-"
+                    break
+
+            reason_reply = reason or "-"
+            if reply_summary:
+                reason_reply = f"{reason_reply} / 回复：{reply_summary}" if reason_reply != "-" else f"回复：{reply_summary}"
+            return title or "-", reason_reply
+
         detail_rows = []
         for item in recent_history:
             if not isinstance(item, dict):
                 continue
             status = item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
-            reason = str(item.get("reason") or item.get("message") or "-").strip()
-            reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
-            reason_reply = reason
-            if reply_summary:
-                reason_reply = f"{reason} / 回复：{reply_summary}" if reason and reason != "-" else f"回复：{reply_summary}"
+            title, reason_reply = auto_reply_display_fields(item)
             forum_topic = f"fid:{item.get('fid') or '-'} / tid:{item.get('tid') or '-'}"
             detail_rows.append([
                 truncate_cell(item.get('account', '-'), 120, nowrap=True),
                 {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(status)]},
                 truncate_cell(item.get('time', '-'), 170, nowrap=True),
                 truncate_cell(forum_topic, 140, nowrap=True),
-                truncate_cell(item.get('title') or '-', 260),
+                truncate_cell(title, 260),
                 truncate_cell(reason_reply, 360),
             ])
 
@@ -3392,7 +3439,6 @@ class SehuatangSignin(_PluginBase):
                 'props': {'elevation': 0, 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:8px;'},
                 'content': [
                     {'component': 'VExpansionPanelTitle', 'props': {'class': 'text-body-2 font-weight-medium'}, 'content': [
-                        {'component': 'VIcon', 'props': {'size': 'small', 'class': 'mr-2'}, 'text': 'mdi-chevron-down'},
                         {'component': 'span', 'text': '查看回帖详情'},
                     ]},
                     {'component': 'VExpansionPanelText', 'content': detail_content},

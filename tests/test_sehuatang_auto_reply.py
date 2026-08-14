@@ -272,6 +272,28 @@ def _plugin_with_auto_reply_ui_data():
             "reason": "回帖成功",
             "reply_summary": "感谢分享",
         },
+        {
+            "time": f"{today} 09:25:00",
+            "date": today,
+            "account": "beta",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "889",
+            "title": "回帖成功 / 回复：谢谢楼主",
+            "reason": "",
+            "reply_summary": "",
+        },
+    ]
+    plugin.data_store[plugin._history_key] = [
+        {
+            "time": f"{today} 09:10:00",
+            "date": today,
+            "account": "alpha",
+            "success": True,
+            "message": "签到成功",
+        }
     ]
     return plugin
 
@@ -282,9 +304,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.0"', source)
-        self.assertEqual(sehuatang["version"], "1.2.0")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.0"])
+        self.assertIn('plugin_version = "1.2.1"', source)
+        self.assertEqual(sehuatang["version"], "1.2.1")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.1"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -335,7 +357,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("VExpansionPanels", component_names)
         self.assertIn("VExpansionPanelTitle", component_names)
         self.assertIn("VExpansionPanelText", component_names)
-        self.assertIn("mdi-chevron-down", card_text)
+        self.assertNotIn("mdi-chevron-down", card_text)
 
     def test_auto_reply_detail_uses_table_with_required_columns_and_truncation(self):
         plugin = _plugin_with_auto_reply_ui_data()
@@ -352,6 +374,33 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("table-layout:fixed", str(table.get("props") or {}))
         td_props = [str(node.get("props") or {}) for node in _nodes_by_component(table, "td")]
         self.assertTrue(any("max-width" in props and "text-overflow:ellipsis" in props for props in td_props))
+
+    def test_auto_reply_detail_repairs_polluted_title_for_display(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        table = _nodes_by_component(auto_reply_card, "VTable")[0]
+        beta_row = next(
+            row for row in _nodes_by_component(table, "tr")
+            if "beta" in _schema_text(row)
+        )
+        cells = _nodes_by_component(beta_row, "td")
+
+        self.assertEqual(cells[4].get("text"), "-")
+        self.assertEqual(cells[5].get("text"), "回帖成功 / 回复：谢谢楼主")
+
+    def test_signin_history_is_collapsible_by_default(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        signin_card = _top_level_card(plugin.get_page(), "签到记录")
+        card_text = _schema_text(signin_card)
+        component_names = [node.get("component") for node in _walk_schema(signin_card)]
+
+        self.assertIn("查看签到记录", card_text)
+        self.assertIn("VExpansionPanels", component_names)
+        self.assertIn("VExpansionPanelTitle", component_names)
+        self.assertIn("VExpansionPanelText", component_names)
+        self.assertIn("signin-history-table", str(signin_card))
 
     def test_config_page_mentions_moviepilot_llm_dependency_for_auto_reply(self):
         plugin_module = _load_plugin_module_with_stubs()
