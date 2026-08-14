@@ -299,6 +299,47 @@ def _plugin_with_auto_reply_ui_data():
             "reply_summary": "",
         },
         {
+            "time": f"{today} 09:21:00",
+            "date": today,
+            "account": "zeta",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "893",
+            "title": "[ED2K｜原档合集] 整理｜本田...\n回帖成功。整理得挺全，预览也直观",
+            "reason": "回帖成功",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:20:30",
+            "date": today,
+            "account": "eta",
+            "success": False,
+            "failed": True,
+            "status": "failed",
+            "result": "失败",
+            "fid": "166",
+            "tid": "894",
+            "title": "失败标题\n回帖失败。页面返回验证码",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:20:15",
+            "date": today,
+            "account": "theta",
+            "success": False,
+            "failed": True,
+            "status": "failed",
+            "result": "失败",
+            "fid": "166",
+            "tid": "895",
+            "title": "失败标题2\n回帖失败 / 回复：页面返回验证码2",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
             "time": f"{today} 09:20:00",
             "date": today,
             "account": "gamma",
@@ -345,9 +386,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.2"', source)
-        self.assertEqual(sehuatang["version"], "1.2.2")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.2"])
+        self.assertIn('plugin_version = "1.2.3"', source)
+        self.assertEqual(sehuatang["version"], "1.2.3")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.3"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -432,6 +473,8 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("提交前安全复核未通过", table_text)
         self.assertIn("回帖成功。感谢分享", table_text)
         self.assertIn("回帖失败。AI 未返回合格短回复", table_text)
+        self.assertIn("回帖失败。页面返回验证码", table_text)
+        self.assertIn("回帖失败。页面返回验证码2", table_text)
         self.assertIn("回帖失败。提交前安全复核未通过", table_text)
 
     def test_auto_reply_detail_repairs_polluted_title_for_display(self):
@@ -455,6 +498,25 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         epsilon_cells = _nodes_by_component(epsilon_row, "td")
         self.assertEqual(epsilon_cells[4].get("text"), "[ED2K｜原档合集] 天音るな DM...")
         self.assertEqual(epsilon_cells[5].get("text"), "回帖成功。这反差设定挺有意思")
+
+        def row_cells_for_account(account: str):
+            for row in _nodes_by_component(table, "tr"):
+                row_cells = _nodes_by_component(row, "td")
+                if row_cells and row_cells[0].get("text") == account:
+                    return row_cells
+            raise AssertionError(f"missing row for account {account}")
+
+        zeta_cells = row_cells_for_account("zeta")
+        self.assertEqual(zeta_cells[4].get("text"), "[ED2K｜原档合集] 整理｜本田...")
+        self.assertEqual(zeta_cells[5].get("text"), "回帖成功。整理得挺全，预览也直观")
+
+        eta_cells = row_cells_for_account("eta")
+        self.assertEqual(eta_cells[4].get("text"), "失败标题")
+        self.assertEqual(eta_cells[5].get("text"), "回帖失败。页面返回验证码")
+
+        theta_cells = row_cells_for_account("theta")
+        self.assertEqual(theta_cells[4].get("text"), "失败标题2")
+        self.assertEqual(theta_cells[5].get("text"), "回帖失败。页面返回验证码2")
 
     def test_signin_history_is_collapsible_by_default(self):
         plugin = _plugin_with_auto_reply_ui_data()

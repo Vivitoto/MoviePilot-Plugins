@@ -69,17 +69,17 @@ class SehuatangCaptchaNudgeTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.2"', init_source)
-        self.assertEqual(sehuatang["version"], "1.2.2")
+        self.assertIn('plugin_version = "1.2.3"', init_source)
+        self.assertEqual(sehuatang["version"], "1.2.3")
         self.assertEqual(
             list(sehuatang["history"]),
             [
+                "v1.2.3",
                 "v1.2.2",
                 "v1.2.1",
                 "v1.2.0",
                 "v1.1.9",
                 "v1.1.8",
-                "v1.1.7",
             ],
         )
 

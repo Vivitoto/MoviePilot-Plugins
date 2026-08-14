@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.2"
+    plugin_version = "1.2.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -3321,29 +3321,73 @@ class SehuatangSignin(_PluginBase):
         def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str, str]:
             """Return title, reason and reply display text, repairing older polluted title rows."""
             title = str(item.get("title") or "").strip()
-            reason = str(item.get("reason") or item.get("message") or "-").strip()
+            reason = str(item.get("reason") or item.get("message") or "").strip()
             reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
-            status_label = self._auto_reply_status_label(
-                item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
-            )
+            status = self._auto_reply_result_status(item)
+            status_label = self._auto_reply_status_label(status)
 
+            success_result_prefixes = {"回帖成功", "回复成功"}
+            failure_result_prefixes = {"回帖失败", "回复失败", "回帖跳过"}
+            direct_result_prefixes = success_result_prefixes | failure_result_prefixes
+            generic_reason_values = {
+                "", "-", status_label,
+                "成功", "失败", "跳过",
+                "回帖成功", "回复成功", "回帖失败", "回复失败", "回帖跳过",
+            }
             polluted_prefixes = sorted(
-                [text for text in {reason, status_label, "回帖成功", "回复成功", "成功"} if text and text != "-"],
+                [
+                    text for text in {
+                        reason, status_label,
+                        "回帖成功", "回复成功", "成功",
+                        "回帖失败", "回复失败", "失败", "回帖跳过", "跳过",
+                    }
+                    if text and text != "-"
+                ],
                 key=len,
                 reverse=True,
             )
             for prefix in polluted_prefixes:
-                marker = f"{prefix} / 回复："
-                marker_index = title.find(marker)
-                if marker_index >= 0:
-                    if not reply_summary:
-                        reply_summary = title[marker_index + len(marker):].strip()
-                    if not reason or reason == "-":
-                        reason = prefix
+                markers = [
+                    f"{prefix} / 回复：",
+                    f"{prefix}/回复：",
+                    f"{prefix} 回复：",
+                    f"{prefix}回复：",
+                ]
+                if prefix in direct_result_prefixes:
+                    markers.extend([f"{prefix}。", f"{prefix}.", f"{prefix}：", f"{prefix}:"])
+                matched = False
+                for marker in markers:
+                    marker_index = title.find(marker)
+                    if marker_index < 0:
+                        continue
+                    suffix = title[marker_index + len(marker):].strip()
+                    if prefix in success_result_prefixes:
+                        if suffix and not reply_summary:
+                            reply_summary = suffix
+                        if not reason:
+                            reason = prefix
+                    elif prefix in failure_result_prefixes:
+                        if suffix and reason in generic_reason_values:
+                            reason = suffix
+                        elif not reason:
+                            reason = prefix
+                    elif "回复：" in marker:
+                        if suffix and not reply_summary:
+                            reply_summary = suffix
+                        if not reason:
+                            reason = prefix
+                    else:
+                        if suffix and reason in generic_reason_values:
+                            reason = suffix
+                        elif not reason:
+                            reason = prefix
                     title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip() or "-"
+                    matched = True
+                    break
+                if matched:
                     break
                 if title == prefix:
-                    if not reason or reason == "-":
+                    if not reason:
                         reason = prefix
                     title = "-"
                     break
