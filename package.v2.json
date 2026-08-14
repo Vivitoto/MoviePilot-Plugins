@@ -69,17 +69,17 @@
         "name": "98签到自用",
         "description": "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。",
         "labels": "签到,手动验证,消息通知,验证码",
-        "version": "1.1.9",
+        "version": "1.2.0",
         "author": "Vivitoto",
         "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png",
         "level": 1,
         "history": {
+            "v1.2.0": "优化详情页与配置页 UI：账号状态前移，自动回帖卡片显示统计并可展开表格详情；配置页简要提示需先在 MoviePilot 设定-系统-智能助手配置中配置大语言模型。",
             "v1.1.9": "整理配置分组（共用访问配置/手动签到/自动回帖），自动回帖新增可自定义通知模板（支持 {account}{result}{reason}{fid}{tid}{title}{reply}{time} 变量）；详情页自动回帖与手动签到记录改为每天每账号一条，新结果覆盖旧的。",
             "v1.1.8": "优化 98 自动回帖风险过滤：普通外链和 magnet/ed2k/thunder/ftp/http 下载协议、网盘及网盘相关中文关键词均不再单独触发硬跳过；仅保留联系方式、群组、短链/跳转引流、诈骗和规则管理类风险拦截，并新增已跳过主题缓存以减少重复硬过滤和 AI 评估。",
             "v1.1.7": "修复 98 自动回帖阻断页判定与诊断：不再仅因普通 Cloudflare 字样判为挑战页；仅明确 Cloudflare challenge、safe gate、权限/登录等硬标记才阻断，并在日志诊断中输出 blocked marker，避免 class=cloudflare,forum,thread 这类模糊标签误导排查。",
             "v1.1.6": "修复 98 自动回帖版块/详情读取：确认 FlareSolverr 与 cloakbrowser 在携带代理与账号 Cookie 时可直读 141/166 与帖子页，移除 curl_cffi 备用依赖；强化 cloakbrowser 启动层代理传递，配置代理时不再无代理直连降级，并为自动回帖增加脱敏诊断日志。",
-            "v1.1.5": "修复 98 自动回帖 FlareSolverr 会话预热：自动回帖创建 FS 会话后先访问签到状态页以合并 FS 返回的 Cookie 与 User-Agent，再启动持久浏览器；预热返回安全页/空页时记录准确日志并继续走浏览器安全页 settle。",
-            "v1.1.4": "修复 98 自动回帖安全页链路：自动回帖创建账号级持久浏览器会话，复用手动签到的安全页 settle 与 Cookie 合并；版块页、详情页和提交回帖优先走持久浏览器，安全页重试后再降级短浏览器/FS 备用，避免短浏览器返回安全页后直接放弃。"
+            "v1.1.5": "修复 98 自动回帖 FlareSolverr 会话预热：自动回帖创建 FS 会话后先访问签到状态页以合并 FS 返回的 Cookie 与 User-Agent，再启动持久浏览器；预热返回安全页/空页时记录准确日志并继续走浏览器安全页 settle。"
         }
     },
     "WeWorkIPCB": {

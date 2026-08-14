@@ -194,15 +194,98 @@ def _load_plugin_module_with_stubs() -> types.ModuleType:
     return module
 
 
+def _walk_schema(value):
+    if isinstance(value, dict):
+        yield value
+        content = value.get("content")
+        if content is not None:
+            yield from _walk_schema(content)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_schema(item)
+
+
+def _schema_text(value) -> str:
+    parts = []
+    for node in _walk_schema(value):
+        text = node.get("text")
+        if text not in (None, ""):
+            parts.append(str(text))
+        props = node.get("props") or {}
+        prop_text = props.get("text") if isinstance(props, dict) else None
+        if prop_text not in (None, ""):
+            parts.append(str(prop_text))
+    return "\n".join(parts)
+
+
+def _nodes_by_component(value, component: str) -> list:
+    return [node for node in _walk_schema(value) if node.get("component") == component]
+
+
+def _top_level_card_index(page: list, marker: str) -> int:
+    for idx, node in enumerate(page):
+        if isinstance(node, dict) and node.get("component") == "VCard" and marker in _schema_text(node):
+            return idx
+    raise AssertionError(f"top-level card containing {marker!r} not found")
+
+
+def _top_level_card(page: list, marker: str) -> dict:
+    return page[_top_level_card_index(page, marker)]
+
+
+def _plugin_with_auto_reply_ui_data():
+    plugin_module = _load_plugin_module_with_stubs()
+    plugin = plugin_module.SehuatangSignin()
+    plugin._accounts = [{"name": "alpha", "cookie_str": "a=b"}]
+    plugin._auto_reply_enabled = True
+    today = plugin._auto_reply_now().strftime("%Y-%m-%d")
+    plugin.data_store[plugin._auto_reply_plan_key] = {
+        "date": today,
+        "created_at": f"{today} 08:50:00",
+        "enabled": True,
+        "forum_ids": ["141", "166"],
+        "window_start": "09:00",
+        "window_end": "12:00",
+        "jobs": [
+            {
+                "account": "alpha",
+                "account_index": 0,
+                "attempt_index": 1,
+                "run_at": f"{today} 10:15:00",
+                "status": "scheduled",
+                "message": "",
+            },
+        ],
+        "message": "",
+    }
+    plugin.data_store[plugin._auto_reply_history_key] = [
+        {
+            "time": f"{today} 09:30:00",
+            "date": today,
+            "account": "alpha",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "888",
+            "title": "一个很长的测试主题标题用于验证表格不会因为文本过长而撑开页面布局",
+            "reason": "回帖成功",
+            "reply_summary": "感谢分享",
+        },
+    ]
+    return plugin
+
+
 class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_plugin_version_is_current(self):
         source = _source()
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.1.9"', source)
-        self.assertEqual(sehuatang["version"], "1.1.9")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.1.9"])
+        self.assertIn('plugin_version = "1.2.0"', source)
+        self.assertEqual(sehuatang["version"], "1.2.0")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.0"])
+        self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
         source = _source()
@@ -228,6 +311,62 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             '"auto_reply_max_thread_age_days": 7',
         ]:
             self.assertIn(token, source)
+
+    def test_detail_page_places_account_status_before_auto_reply_card(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        page = plugin.get_page()
+
+        overview_index = _top_level_card_index(page, "执行总览")
+        account_index = _top_level_card_index(page, "账号状态")
+        auto_reply_index = _top_level_card_index(page, "自动回帖")
+        self.assertEqual(account_index, overview_index + 1)
+        self.assertLess(account_index, auto_reply_index)
+
+    def test_auto_reply_card_shows_stats_and_expandable_detail(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        card_text = _schema_text(auto_reply_card)
+
+        for marker in ["今日计划数", "成功", "失败", "跳过", "待执行/计划中", "查看回帖详情"]:
+            self.assertIn(marker, card_text)
+        component_names = [node.get("component") for node in _walk_schema(auto_reply_card)]
+        self.assertIn("VExpansionPanels", component_names)
+        self.assertIn("VExpansionPanelTitle", component_names)
+        self.assertIn("VExpansionPanelText", component_names)
+        self.assertIn("mdi-chevron-down", card_text)
+
+    def test_auto_reply_detail_uses_table_with_required_columns_and_truncation(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        tables = _nodes_by_component(auto_reply_card, "VTable")
+        self.assertTrue(tables)
+        table = tables[0]
+        table_text = _schema_text(table)
+
+        for header in ["账号", "结果", "时间", "版块/主题", "标题", "原因/回复摘要"]:
+            self.assertIn(header, table_text)
+        self.assertIn("auto-reply-detail-table", str(table.get("props") or {}))
+        self.assertIn("table-layout:fixed", str(table.get("props") or {}))
+        td_props = [str(node.get("props") or {}) for node in _nodes_by_component(table, "td")]
+        self.assertTrue(any("max-width" in props and "text-overflow:ellipsis" in props for props in td_props))
+
+    def test_config_page_mentions_moviepilot_llm_dependency_for_auto_reply(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+
+        form, _ = plugin.get_form()
+        form_text = _schema_text(form)
+        llm_alerts = [
+            node for node in _nodes_by_component(form, "VAlert")
+            if "大语言模型" in _schema_text(node)
+        ]
+
+        self.assertTrue(llm_alerts)
+        self.assertIn("自动回帖依赖大语言模型", form_text)
+        self.assertIn("设定-系统-智能助手配置", form_text)
 
     def test_expected_pure_helpers_are_present(self):
         source = _source()

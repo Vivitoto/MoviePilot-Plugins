@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.1.9"
+    plugin_version = "1.2.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -489,10 +489,6 @@ class SehuatangSignin(_PluginBase):
             }]
         })
 
-        auto_reply_card = self._auto_reply_summary_card(auto_reply_plan, auto_reply_history)
-        if auto_reply_card:
-            page.append(auto_reply_card)
-
         if self._accounts:
             cards = []
             for idx, acct in enumerate(self._accounts):
@@ -564,9 +560,21 @@ class SehuatangSignin(_PluginBase):
         else:
             page.append({
                 'component': 'VCard',
-                'props': {'variant': 'tonal', 'class': 'mb-4'},
-                'content': [{'component': 'VCardItem', 'content': [{'component': 'div', 'text': '尚未配置账号，请先在设置中填写账号列表'}]}]
+                'props': {'variant': 'tonal', 'class': 'mb-3', 'style': 'border-radius:8px;'},
+                'content': [
+                    {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
+                        {'component': 'div', 'props': {'class': 'd-flex align-center mb-2'}, 'content': [
+                            {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-account-multiple-outline'},
+                            {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '账号状态'},
+                        ]},
+                        {'component': 'div', 'props': {'class': 'text-body-2 text-medium-emphasis'}, 'text': '尚未配置账号，请先在设置中填写账号列表'},
+                    ]},
+                ]
             })
+
+        auto_reply_card = self._auto_reply_summary_card(auto_reply_plan, auto_reply_history)
+        if auto_reply_card:
+            page.append(auto_reply_card)
 
         chart_card = self._money_chart_card(money_history, account_ids)
         if chart_card:
@@ -745,6 +753,7 @@ class SehuatangSignin(_PluginBase):
                             'component': 'VCardItem',
                             'content': [
                                 {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold mb-3'}, 'text': '💬 自动回帖'},
+                                {'component': 'VAlert', 'props': {'type': 'info', 'variant': 'tonal', 'class': 'mb-4', 'text': '自动回帖依赖大语言模型，请先在 MoviePilot「设定-系统-智能助手配置」中配置可用模型。'}},
                                 {
                                     'component': 'VRow',
                                     'props': {'dense': True, 'align': 'center', 'class': 'gy-4'},
@@ -3212,7 +3221,27 @@ class SehuatangSignin(_PluginBase):
             plan = {}
         jobs = plan.get("jobs") if isinstance(plan, dict) else []
         jobs = jobs if isinstance(jobs, list) else []
-        recent_history = history[:6] if isinstance(history, list) else []
+        recent_history = history[:30] if isinstance(history, list) else []
+        today = self._auto_reply_now().strftime("%Y-%m-%d")
+        plan_date = str(plan.get("date") or "")
+        today_jobs = jobs if plan_date in ("", today) else []
+        today_history = [
+            item for item in recent_history
+            if isinstance(item, dict) and str(item.get("date") or item.get("time") or "").startswith(today)
+        ]
+        success_count = sum(1 for item in today_history if self._auto_reply_result_status(item) == "success")
+        failed_count = sum(1 for item in today_history if self._auto_reply_result_status(item) == "failed")
+        skipped_count = sum(1 for item in today_history if self._auto_reply_result_status(item) == "skipped")
+        pending_count = sum(
+            1 for job in today_jobs
+            if isinstance(job, dict) and str(job.get("status") or "pending") in ("scheduled", "pending", "")
+        )
+        forum_ids_value = plan.get("forum_ids") or []
+        if isinstance(forum_ids_value, list):
+            forum_ids_text = ",".join(str(item) for item in forum_ids_value if str(item).strip())
+        else:
+            forum_ids_text = str(forum_ids_value).strip()
+        forum_ids_text = forum_ids_text or "-"
 
         def status_chip(status: str) -> Dict[str, Any]:
             status_text = str(status or "pending")
@@ -3223,49 +3252,91 @@ class SehuatangSignin(_PluginBase):
                 "skipped": "secondary",
                 "scheduled": "primary",
                 "pending": "warning",
+                "missed": "warning",
+                "invalid": "error",
+            }
+            label_map = {
+                "done": "成功",
+                "success": "成功",
+                "failed": "失败",
+                "skipped": "跳过",
+                "scheduled": "计划中",
+                "pending": "待执行",
+                "missed": "已过期",
+                "invalid": "无效",
             }
             return {
                 'component': 'VChip',
                 'props': {'size': 'x-small', 'variant': 'tonal', 'color': color_map.get(status_text, 'secondary')},
-                'text': status_text,
+                'text': label_map.get(status_text, status_text),
             }
 
-        rows = []
-        for job in jobs[:8]:
-            if not isinstance(job, dict):
-                continue
-            rows.append([
-                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': job.get('account', '-')},
-                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'text': job.get('run_at', '-')},
-                {'component': 'td', 'content': [status_chip(job.get('status') or 'pending')]},
-                {'component': 'td', 'props': {'class': 'text-truncate', 'style': 'max-width:360px;'}, 'text': job.get('message', '') or '-'},
-            ])
+        def stat_item(label: str, value: Any, color: str) -> Dict[str, Any]:
+            color_map = {
+                "primary": ("rgba(25,118,210,.08)", "rgba(25,118,210,.22)", "#1565C0"),
+                "success": ("rgba(46,125,50,.08)", "rgba(46,125,50,.22)", "#2E7D32"),
+                "error": ("rgba(211,47,47,.08)", "rgba(211,47,47,.22)", "#C62828"),
+                "warning": ("rgba(245,124,0,.10)", "rgba(245,124,0,.24)", "#E65100"),
+                "secondary": ("rgba(97,97,97,.08)", "rgba(97,97,97,.20)", "#424242"),
+            }
+            bg, border, text_color = color_map.get(color, color_map["primary"])
+            return {
+                'component': 'VCol',
+                'props': {'cols': 6, 'sm': 4, 'md': 2},
+                'content': [{
+                    'component': 'div',
+                    'props': {'style': f'background:{bg};border:1px solid {border};border-radius:8px;padding:8px 10px;min-height:56px;'},
+                    'content': [
+                        {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': label},
+                        {'component': 'div', 'props': {'class': 'text-subtitle-2 font-weight-bold text-truncate', 'style': f'color:{text_color};'}, 'text': str(value if value not in (None, "") else "-")},
+                    ]
+                }]
+            }
 
-        history_items = []
+        def truncate_cell(text: Any, max_width: int, nowrap: bool = False) -> Dict[str, Any]:
+            raw_text = str(text if text not in (None, "") else "-")
+            style = f"max-width:{max_width}px;overflow:hidden;text-overflow:ellipsis;"
+            if nowrap:
+                style += "white-space:nowrap;"
+            else:
+                style += "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
+            return {'component': 'td', 'props': {'class': 'text-truncate', 'style': style, 'title': raw_text}, 'text': raw_text}
+
+        detail_rows = []
         for item in recent_history:
             if not isinstance(item, dict):
                 continue
             status = item.get("status") or item.get("result_status") or ("success" if item.get("success") else "failed")
-            label = item.get("result") or self._auto_reply_status_label(item)
-            title = str(item.get("title") or "").strip()
             reason = str(item.get("reason") or item.get("message") or "-").strip()
-            meta = f"{item.get('time', '-')}｜{item.get('account', '-')}"
-            if item.get("fid") or item.get("tid"):
-                meta += f"｜fid:{item.get('fid') or '-'} tid:{item.get('tid') or '-'}"
-            history_items.append({
-                'component': 'div',
-                'props': {'style': 'border:1px solid rgba(0,0,0,.06);border-radius:10px;padding:8px 10px;margin-top:8px;'},
-                'content': [
-                    {'component': 'div', 'props': {'class': 'd-flex align-center ga-2 mb-1'}, 'content': [
-                        status_chip(status),
-                        {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis text-truncate'}, 'text': meta},
-                    ]},
-                    {'component': 'div', 'props': {'class': 'text-body-2 text-truncate'}, 'text': title or reason},
-                    {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis text-truncate'}, 'text': f"{label}：{reason}"},
-                ]
-            })
+            reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
+            reason_reply = reason
+            if reply_summary:
+                reason_reply = f"{reason} / 回复：{reply_summary}" if reason and reason != "-" else f"回复：{reply_summary}"
+            forum_topic = f"fid:{item.get('fid') or '-'} / tid:{item.get('tid') or '-'}"
+            detail_rows.append([
+                truncate_cell(item.get('account', '-'), 120, nowrap=True),
+                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(status)]},
+                truncate_cell(item.get('time', '-'), 170, nowrap=True),
+                truncate_cell(forum_topic, 140, nowrap=True),
+                truncate_cell(item.get('title') or '-', 260),
+                truncate_cell(reason_reply, 360),
+            ])
 
-        plan_text = f"版块：{','.join(plan.get('forum_ids') or []) or '-'}｜窗口：{plan.get('window_start') or '-'}-{plan.get('window_end') or '-'}｜{plan.get('message') or '今日计划'}"
+        for job in today_jobs[:20]:
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "pending")
+            topic_text = f"版块:{forum_ids_text} / 尝试:{job.get('attempt_index') or 1}"
+            detail_rows.append([
+                truncate_cell(job.get('account', '-'), 120, nowrap=True),
+                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(status)]},
+                truncate_cell(job.get('run_at', '-'), 170, nowrap=True),
+                truncate_cell(topic_text, 140, nowrap=True),
+                truncate_cell('自动回帖计划', 260),
+                truncate_cell(job.get('message', '') or plan.get('message') or '等待执行', 360),
+            ])
+
+        plan_text = f"版块：{forum_ids_text}｜窗口：{plan.get('window_start') or '-'}-{plan.get('window_end') or '-'}｜{plan.get('message') or '今日计划'}"
         content = [
             {'component': 'VCardText', 'props': {'class': 'py-3'}, 'content': [
                 {'component': 'div', 'props': {'class': 'd-flex align-center justify-space-between mb-2'}, 'content': [
@@ -3273,28 +3344,64 @@ class SehuatangSignin(_PluginBase):
                         {'component': 'VIcon', 'props': {'color': 'primary', 'class': 'mr-2'}, 'text': 'mdi-message-reply-text-outline'},
                         {'component': 'div', 'props': {'class': 'text-subtitle-1 font-weight-bold'}, 'text': '自动回帖'},
                     ]},
-                    {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': 'primary'}, 'text': f"计划 {len(jobs)}"},
+                    {'component': 'VChip', 'props': {'size': 'x-small', 'variant': 'tonal', 'color': 'primary'}, 'text': f"计划 {len(today_jobs)}"},
                 ]},
                 {'component': 'div', 'props': {'class': 'text-caption text-medium-emphasis'}, 'text': plan_text},
+                {'component': 'VRow', 'props': {'dense': True, 'class': 'mt-2'}, 'content': [
+                    stat_item('今日计划数', len(today_jobs), 'primary'),
+                    stat_item('成功', success_count, 'success'),
+                    stat_item('失败', failed_count, 'error'),
+                    stat_item('跳过', skipped_count, 'secondary'),
+                    stat_item('待执行/计划中', pending_count, 'warning'),
+                ]},
             ]},
         ]
-        if rows:
-            content.append({
+        detail_content = []
+        if detail_rows:
+            detail_table = {
                 'component': 'VTable',
-                'props': {'density': 'compact', 'hover': True, 'class': 'px-2'},
+                'props': {'density': 'compact', 'hover': True, 'class': 'auto-reply-detail-table', 'style': 'min-width:920px;table-layout:fixed;'},
                 'content': [
                     {'component': 'thead', 'content': [{'component': 'tr', 'content': [
-                        {'component': 'th', 'text': '账号'}, {'component': 'th', 'text': '时间'},
-                        {'component': 'th', 'text': '状态'}, {'component': 'th', 'text': '说明'},
+                        {'component': 'th', 'props': {'style': 'width:120px;'}, 'text': '账号'},
+                        {'component': 'th', 'props': {'style': 'width:90px;'}, 'text': '结果'},
+                        {'component': 'th', 'props': {'style': 'width:170px;'}, 'text': '时间'},
+                        {'component': 'th', 'props': {'style': 'width:140px;'}, 'text': '版块/主题'},
+                        {'component': 'th', 'props': {'style': 'width:260px;'}, 'text': '标题'},
+                        {'component': 'th', 'props': {'style': 'width:360px;'}, 'text': '原因/回复摘要'},
                     ]}]},
-                    {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in rows]},
-                ]
+                    {'component': 'tbody', 'content': [{'component': 'tr', 'content': row} for row in detail_rows]},
+                ],
+            }
+            detail_content.append({
+                'component': 'div',
+                'props': {'style': 'overflow-x:auto;'},
+                'content': [detail_table],
             })
-        if history_items:
-            content.append({'component': 'VCardText', 'props': {'class': 'pt-2'}, 'content': history_items})
+        else:
+            detail_content.append({
+                'component': 'div',
+                'props': {'class': 'text-body-2 text-medium-emphasis px-2 py-3'},
+                'text': '暂无回帖详情',
+            })
+        content.append({
+            'component': 'VExpansionPanels',
+            'props': {'variant': 'accordion', 'class': 'px-2 pb-3'},
+            'content': [{
+                'component': 'VExpansionPanel',
+                'props': {'elevation': 0, 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:8px;'},
+                'content': [
+                    {'component': 'VExpansionPanelTitle', 'props': {'class': 'text-body-2 font-weight-medium'}, 'content': [
+                        {'component': 'VIcon', 'props': {'size': 'small', 'class': 'mr-2'}, 'text': 'mdi-chevron-down'},
+                        {'component': 'span', 'text': '查看回帖详情'},
+                    ]},
+                    {'component': 'VExpansionPanelText', 'content': detail_content},
+                ]
+            }]
+        })
         return {
             'component': 'VCard',
-            'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:14px;'},
+            'props': {'variant': 'flat', 'class': 'mb-3', 'style': 'border:1px solid rgba(0,0,0,.06);border-radius:8px;'},
             'content': content,
         }
 
