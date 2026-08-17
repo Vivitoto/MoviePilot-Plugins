@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.3"
+    plugin_version = "1.2.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1528,6 +1528,160 @@ class SehuatangSignin(_PluginBase):
     @classmethod
     def _auto_reply_status_label(cls, result: Any) -> str:
         return cls._auto_reply_status_labels.get(cls._auto_reply_result_status(result), "失败")
+
+    @classmethod
+    def _split_auto_reply_fields(cls, item: Dict[str, Any], display: bool = False) -> Tuple[str, str, str]:
+        """Return clean title, reason and reply text, repairing older polluted title rows."""
+        data = item if isinstance(item, dict) else {}
+        title = cls._strip_html(str(data.get("title") or "")).strip()
+        reason = cls._strip_html(str(data.get("reason") or data.get("message") or "")).strip()
+        reply_summary = cls._strip_html(str(data.get("reply_summary") or data.get("reply") or "")).strip()
+        status = cls._auto_reply_result_status(item)
+        status_label = cls._auto_reply_status_label(status)
+
+        success_result_prefixes = {"回帖成功", "回复成功"}
+        failure_result_prefixes = {"回帖失败", "回复失败", "回帖跳过"}
+        direct_result_prefixes = success_result_prefixes | failure_result_prefixes
+        generic_reason_values = {
+            "", "-", status_label,
+            "成功", "失败", "跳过",
+            "回帖成功", "回复成功", "回帖失败", "回复失败", "回帖跳过",
+        }
+
+        def repair_legacy_labeled_title() -> None:
+            nonlocal title, reason, reply_summary
+            lines = [line.strip() for line in title.splitlines() if line.strip()]
+            if len(lines) < 2:
+                return
+
+            label_pattern = re.compile(r"^(回帖结果|回复结果|结果|原因|回复)(?:\s*[：:]\s*(.*))?$")
+            values: Dict[str, str] = {}
+            title_lines = []
+            label_seen = False
+            pending_key = ""
+            last_key = ""
+            first_label = ""
+
+            def field_key(label: str) -> str:
+                if label in {"回帖结果", "回复结果", "结果"}:
+                    return "result"
+                if label == "原因":
+                    return "reason"
+                return "reply"
+
+            def append_value(key: str, value: str) -> None:
+                value = re.sub(r"\s+", " ", value or "").strip()
+                if not value:
+                    return
+                values[key] = f"{values.get(key, '')} {value}".strip()
+
+            for line in lines:
+                match = label_pattern.match(line)
+                if match:
+                    label = match.group(1)
+                    if not first_label:
+                        first_label = label
+                    label_seen = True
+                    key = field_key(label)
+                    value = (match.group(2) or "").strip()
+                    if value:
+                        append_value(key, value)
+                        last_key = key
+                        pending_key = ""
+                    else:
+                        pending_key = key
+                    continue
+                if pending_key:
+                    append_value(pending_key, line)
+                    last_key = pending_key
+                    pending_key = ""
+                elif label_seen and last_key:
+                    append_value(last_key, line)
+                else:
+                    title_lines.append(line)
+
+            if not label_seen or field_key(first_label) != "result":
+                return
+            title = "\n".join(title_lines).strip().rstrip("-/｜|，,；;").strip()
+            reason_value = values.get("reason", "")
+            result_value = values.get("result", "")
+            reply_value = values.get("reply", "")
+            if reason_value and reason in generic_reason_values:
+                reason = reason_value
+            elif result_value and reason in generic_reason_values and result_value not in generic_reason_values:
+                reason = result_value
+            if reply_value and not reply_summary:
+                reply_summary = reply_value
+
+        repair_legacy_labeled_title()
+
+        polluted_prefixes = sorted(
+            [
+                text for text in {
+                    reason, status_label,
+                    "回帖成功", "回复成功", "成功",
+                    "回帖失败", "回复失败", "失败", "回帖跳过", "跳过",
+                }
+                if text and text != "-"
+            ],
+            key=len,
+            reverse=True,
+        )
+        for prefix in polluted_prefixes:
+            markers = [
+                f"{prefix} / 回复：",
+                f"{prefix}/回复：",
+                f"{prefix} 回复：",
+                f"{prefix}回复：",
+            ]
+            if prefix in direct_result_prefixes:
+                markers.extend([f"{prefix}。", f"{prefix}.", f"{prefix}：", f"{prefix}:"])
+            matched = False
+            for marker in markers:
+                # Only repair markers that occupy their own result line. A real topic
+                # title may legitimately contain words like "回帖成功。" mid-title;
+                # saving-layer normalization must not trim those titles.
+                marker_match = re.search(rf"(^|\n)\s*{re.escape(marker)}", title)
+                if not marker_match:
+                    continue
+                if reason not in generic_reason_values or reply_summary:
+                    continue
+                marker_index = marker_match.start()
+                suffix_index = marker_match.end()
+                suffix = title[suffix_index:].strip()
+                if prefix in success_result_prefixes:
+                    if suffix and not reply_summary:
+                        reply_summary = suffix
+                    if reason in generic_reason_values:
+                        reason = prefix
+                elif prefix in failure_result_prefixes:
+                    if suffix and reason in generic_reason_values:
+                        reason = suffix
+                    elif reason in generic_reason_values:
+                        reason = prefix
+                elif "回复：" in marker:
+                    if suffix and not reply_summary:
+                        reply_summary = suffix
+                    if not reason:
+                        reason = prefix
+                else:
+                    if suffix and reason in generic_reason_values:
+                        reason = suffix
+                    elif not reason:
+                        reason = prefix
+                title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip()
+                matched = True
+                break
+            if matched:
+                break
+            if title == prefix and reason in generic_reason_values and not reply_summary:
+                reason = prefix
+                title = ""
+                break
+
+        if display:
+            return title or "-", reason or "-", reply_summary or "-"
+        return title, reason, reply_summary
 
     @classmethod
     def _normalize_auto_reply_result(cls, result: Dict[str, Any]) -> Dict[str, Any]:
@@ -3119,7 +3273,16 @@ class SehuatangSignin(_PluginBase):
         now = self._auto_reply_now()
         result = self._normalize_auto_reply_result(result)
         status = self._auto_reply_result_status(result)
-        reason = str(result.get("reason") or result.get("message") or "")[:160]
+        title, reason, reply_summary = self._split_auto_reply_fields(result)
+        reason = reason[:160]
+        reply_summary = reply_summary[:60]
+        result = dict(result)
+        result.update({
+            "title": title[:160],
+            "message": reason,
+            "reason": reason,
+            "reply_summary": reply_summary,
+        })
         date = now.strftime("%Y-%m-%d")
         # One record per account per day; new result overwrites the old one.
         history = [
@@ -3140,10 +3303,10 @@ class SehuatangSignin(_PluginBase):
             "result": reason or self._auto_reply_status_label(status),
             "fid": str(result.get("fid") or ""),
             "tid": str(result.get("tid") or ""),
-            "title": str(result.get("title") or "")[:160],
+            "title": title[:160],
             "message": reason,
             "reason": reason,
-            "reply_summary": str(result.get("reply_summary") or "")[:60],
+            "reply_summary": reply_summary,
             "risk_reasons": result.get("risk_reasons") or [],
         })
         self.save_data(self._auto_reply_history_key, history[:50])
@@ -3196,6 +3359,14 @@ class SehuatangSignin(_PluginBase):
         if not self._notify:
             return
         result = self._normalize_auto_reply_result(result)
+        title, reason, reply_summary = self._split_auto_reply_fields(result)
+        result = dict(result)
+        result.update({
+            "title": title,
+            "message": reason,
+            "reason": reason,
+            "reply_summary": reply_summary,
+        })
         status = self._auto_reply_result_status(result)
         label = self._auto_reply_status_label(status)
         text = self._render_auto_reply_notify(account_id, result, label)
@@ -3319,80 +3490,7 @@ class SehuatangSignin(_PluginBase):
             return {'component': 'td', 'props': {'class': 'text-truncate', 'style': style, 'title': raw_text}, 'text': raw_text}
 
         def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str, str]:
-            """Return title, reason and reply display text, repairing older polluted title rows."""
-            title = str(item.get("title") or "").strip()
-            reason = str(item.get("reason") or item.get("message") or "").strip()
-            reply_summary = str(item.get("reply_summary") or item.get("reply") or "").strip()
-            status = self._auto_reply_result_status(item)
-            status_label = self._auto_reply_status_label(status)
-
-            success_result_prefixes = {"回帖成功", "回复成功"}
-            failure_result_prefixes = {"回帖失败", "回复失败", "回帖跳过"}
-            direct_result_prefixes = success_result_prefixes | failure_result_prefixes
-            generic_reason_values = {
-                "", "-", status_label,
-                "成功", "失败", "跳过",
-                "回帖成功", "回复成功", "回帖失败", "回复失败", "回帖跳过",
-            }
-            polluted_prefixes = sorted(
-                [
-                    text for text in {
-                        reason, status_label,
-                        "回帖成功", "回复成功", "成功",
-                        "回帖失败", "回复失败", "失败", "回帖跳过", "跳过",
-                    }
-                    if text and text != "-"
-                ],
-                key=len,
-                reverse=True,
-            )
-            for prefix in polluted_prefixes:
-                markers = [
-                    f"{prefix} / 回复：",
-                    f"{prefix}/回复：",
-                    f"{prefix} 回复：",
-                    f"{prefix}回复：",
-                ]
-                if prefix in direct_result_prefixes:
-                    markers.extend([f"{prefix}。", f"{prefix}.", f"{prefix}：", f"{prefix}:"])
-                matched = False
-                for marker in markers:
-                    marker_index = title.find(marker)
-                    if marker_index < 0:
-                        continue
-                    suffix = title[marker_index + len(marker):].strip()
-                    if prefix in success_result_prefixes:
-                        if suffix and not reply_summary:
-                            reply_summary = suffix
-                        if not reason:
-                            reason = prefix
-                    elif prefix in failure_result_prefixes:
-                        if suffix and reason in generic_reason_values:
-                            reason = suffix
-                        elif not reason:
-                            reason = prefix
-                    elif "回复：" in marker:
-                        if suffix and not reply_summary:
-                            reply_summary = suffix
-                        if not reason:
-                            reason = prefix
-                    else:
-                        if suffix and reason in generic_reason_values:
-                            reason = suffix
-                        elif not reason:
-                            reason = prefix
-                    title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip() or "-"
-                    matched = True
-                    break
-                if matched:
-                    break
-                if title == prefix:
-                    if not reason:
-                        reason = prefix
-                    title = "-"
-                    break
-
-            return title or "-", reason or "-", reply_summary or "-"
+            return self._split_auto_reply_fields(item, display=True)
 
         def auto_reply_result_text(item: Dict[str, Any], reason: str, reply_summary: str) -> str:
             status = self._auto_reply_result_status(item)

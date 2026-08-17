@@ -312,6 +312,19 @@ def _plugin_with_auto_reply_ui_data():
             "reply_summary": "",
         },
         {
+            "time": f"{today} 09:20:45",
+            "date": today,
+            "account": "screenshot",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "900",
+            "title": "[ED2K｜整理] 我心目中的女神（...\n回帖成功。整理得挺全，预览图也挺直观",
+            "reason": "回帖成功",
+            "reply_summary": "",
+        },
+        {
             "time": f"{today} 09:20:30",
             "date": today,
             "account": "eta",
@@ -336,6 +349,60 @@ def _plugin_with_auto_reply_ui_data():
             "fid": "166",
             "tid": "895",
             "title": "失败标题2\n回帖失败 / 回复：页面返回验证码2",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:19:45",
+            "date": today,
+            "account": "iota",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "896",
+            "title": "旧格式标题\n回帖结果：成功\n原因：回帖成功\n回复：这条旧回复应该进结果列",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:19:30",
+            "date": today,
+            "account": "kappa",
+            "success": False,
+            "failed": True,
+            "status": "failed",
+            "result": "失败",
+            "fid": "166",
+            "tid": "897",
+            "title": "旧失败标题\n结果：失败\n原因：两次发表间隔过短\n回复：",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:19:15",
+            "date": today,
+            "account": "lambda",
+            "success": True,
+            "status": "success",
+            "result": "成功",
+            "fid": "141",
+            "tid": "898",
+            "title": "旧HTML标题<br/>回帖结果：成功<br>原因：回帖成功<br />回复：HTML 回复保留",
+            "reason": "",
+            "reply_summary": "",
+        },
+        {
+            "time": f"{today} 09:19:00",
+            "date": today,
+            "account": "mu",
+            "success": False,
+            "failed": True,
+            "status": "failed",
+            "result": "失败",
+            "fid": "166",
+            "tid": "899",
+            "title": "无冒号失败标题<br>回帖结果<br>失败<br>原因<br>页面返回验证码<br>回复<br>",
             "reason": "",
             "reply_summary": "",
         },
@@ -386,9 +453,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.3"', source)
-        self.assertEqual(sehuatang["version"], "1.2.3")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.3"])
+        self.assertIn('plugin_version = "1.2.4"', source)
+        self.assertEqual(sehuatang["version"], "1.2.4")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.4"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -510,6 +577,10 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertEqual(zeta_cells[4].get("text"), "[ED2K｜原档合集] 整理｜本田...")
         self.assertEqual(zeta_cells[5].get("text"), "回帖成功。整理得挺全，预览也直观")
 
+        screenshot_cells = row_cells_for_account("screenshot")
+        self.assertEqual(screenshot_cells[4].get("text"), "[ED2K｜整理] 我心目中的女神（...")
+        self.assertEqual(screenshot_cells[5].get("text"), "回帖成功。整理得挺全，预览图也挺直观")
+
         eta_cells = row_cells_for_account("eta")
         self.assertEqual(eta_cells[4].get("text"), "失败标题")
         self.assertEqual(eta_cells[5].get("text"), "回帖失败。页面返回验证码")
@@ -517,6 +588,241 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         theta_cells = row_cells_for_account("theta")
         self.assertEqual(theta_cells[4].get("text"), "失败标题2")
         self.assertEqual(theta_cells[5].get("text"), "回帖失败。页面返回验证码2")
+
+    def test_auto_reply_detail_repairs_legacy_labeled_title_rows_for_display(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        table = _nodes_by_component(auto_reply_card, "VTable")[0]
+
+        def row_cells_for_account(account: str):
+            for row in _nodes_by_component(table, "tr"):
+                row_cells = _nodes_by_component(row, "td")
+                if row_cells and row_cells[0].get("text") == account:
+                    return row_cells
+            raise AssertionError(f"missing row for account {account}")
+
+        expectations = {
+            "iota": ("旧格式标题", "回帖成功。这条旧回复应该进结果列"),
+            "kappa": ("旧失败标题", "回帖失败。两次发表间隔过短"),
+            "lambda": ("旧HTML标题", "回帖成功。HTML 回复保留"),
+            "mu": ("无冒号失败标题", "回帖失败。页面返回验证码"),
+        }
+        for account, (expected_title, expected_result) in expectations.items():
+            cells = row_cells_for_account(account)
+            row_text = _schema_text(cells)
+            self.assertEqual(cells[4].get("text"), expected_title)
+            self.assertEqual(cells[5].get("text"), expected_result)
+            for polluted_label in ["回帖结果", "结果：", "原因：", "回复：", "<br"]:
+                self.assertNotIn(polluted_label, row_text)
+
+    def test_record_auto_reply_result_normalizes_polluted_title_before_save(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_enabled = True
+
+        cases = [
+            (
+                "save-success",
+                {
+                    "status": "success",
+                    "fid": "141",
+                    "tid": "901",
+                    "title": "新成功标题\n回帖成功。回复内容",
+                },
+                {
+                    "title": "新成功标题",
+                    "reason": "回帖成功",
+                    "reply_summary": "回复内容",
+                    "result": "回帖成功",
+                    "display_result": "回帖成功。回复内容",
+                },
+            ),
+            (
+                "save-failed",
+                {
+                    "status": "failed",
+                    "fid": "166",
+                    "tid": "902",
+                    "title": "新失败标题\n回帖失败。页面返回验证码",
+                },
+                {
+                    "title": "新失败标题",
+                    "reason": "页面返回验证码",
+                    "reply_summary": "",
+                    "result": "页面返回验证码",
+                    "display_result": "回帖失败。页面返回验证码",
+                },
+            ),
+            (
+                "save-labeled",
+                {
+                    "status": "success",
+                    "fid": "141",
+                    "tid": "903",
+                    "title": "字段标题\n回帖结果：成功\n原因：回帖成功\n回复：字段回复",
+                },
+                {
+                    "title": "字段标题",
+                    "reason": "回帖成功",
+                    "reply_summary": "字段回复",
+                    "result": "回帖成功",
+                    "display_result": "回帖成功。字段回复",
+                },
+            ),
+            (
+                "save-mid-title-success",
+                {
+                    "status": "success",
+                    "fid": "141",
+                    "tid": "904",
+                    "title": "正常标题 回帖成功。经验分享合集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                },
+                {
+                    "title": "正常标题 回帖成功。经验分享合集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                    "result": "回帖成功",
+                    "display_result": "回帖成功。短回复",
+                },
+            ),
+            (
+                "save-mid-title-failed",
+                {
+                    "status": "failed",
+                    "fid": "166",
+                    "tid": "905",
+                    "title": "教程：回帖失败。排查方法",
+                    "reason": "页面返回异常",
+                },
+                {
+                    "title": "教程：回帖失败。排查方法",
+                    "reason": "页面返回异常",
+                    "reply_summary": "",
+                    "result": "页面返回异常",
+                    "display_result": "回帖失败。页面返回异常",
+                },
+            ),
+            (
+                "save-multiline-title-success",
+                {
+                    "status": "success",
+                    "fid": "141",
+                    "tid": "906",
+                    "title": "正常标题\n回帖成功。经验分享合集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                },
+                {
+                    "title": "正常标题\n回帖成功。经验分享合集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                    "result": "回帖成功",
+                    "display_result": "回帖成功。短回复",
+                },
+            ),
+            (
+                "save-multiline-title-reason-label",
+                {
+                    "status": "success",
+                    "fid": "141",
+                    "tid": "907",
+                    "title": "片名\n原因：分析很完整\n第2集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                },
+                {
+                    "title": "片名\n原因：分析很完整\n第2集",
+                    "reason": "回帖成功",
+                    "reply_summary": "短回复",
+                    "result": "回帖成功",
+                    "display_result": "回帖成功。短回复",
+                },
+            ),
+            (
+                "save-multiline-title-failed",
+                {
+                    "status": "failed",
+                    "fid": "166",
+                    "tid": "908",
+                    "title": "教程\n回帖失败。排查方法",
+                    "reason": "页面返回异常",
+                },
+                {
+                    "title": "教程\n回帖失败。排查方法",
+                    "reason": "页面返回异常",
+                    "reply_summary": "",
+                    "result": "页面返回异常",
+                    "display_result": "回帖失败。页面返回异常",
+                },
+            ),
+        ]
+
+        for account, result, _ in cases:
+            plugin._record_auto_reply_result(account, result)
+
+        history = {
+            item["account"]: item
+            for item in plugin.data_store[plugin._auto_reply_history_key]
+        }
+        for account, _, expected in cases:
+            stored = history[account]
+            self.assertEqual(stored["title"], expected["title"])
+            self.assertEqual(stored["reason"], expected["reason"])
+            self.assertEqual(stored["reply_summary"], expected["reply_summary"])
+            self.assertEqual(stored["result"], expected["result"])
+            preserved_marker_title_accounts = {
+                "save-mid-title-success",
+                "save-mid-title-failed",
+                "save-multiline-title-success",
+                "save-multiline-title-reason-label",
+                "save-multiline-title-failed",
+            }
+            if account not in preserved_marker_title_accounts:
+                for polluted_text in ["回帖成功。", "回帖失败。", "回帖结果", "原因：", "回复："]:
+                    self.assertNotIn(polluted_text, stored["title"])
+
+        today = plugin._auto_reply_now().strftime("%Y-%m-%d")
+        success_records = plugin.data_store[plugin._auto_reply_success_key][today]
+        self.assertEqual(success_records["save-success"]["title"], "新成功标题")
+        self.assertEqual(success_records["save-labeled"]["title"], "字段标题")
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        table = _nodes_by_component(auto_reply_card, "VTable")[0]
+
+        def row_cells_for_account(account: str):
+            for row in _nodes_by_component(table, "tr"):
+                row_cells = _nodes_by_component(row, "td")
+                if row_cells and row_cells[0].get("text") == account:
+                    return row_cells
+            raise AssertionError(f"missing row for account {account}")
+
+        for account, _, expected in cases:
+            cells = row_cells_for_account(account)
+            self.assertEqual(cells[4].get("text"), expected["title"])
+            self.assertEqual(cells[5].get("text"), expected["display_result"])
+
+    def test_auto_reply_notification_uses_normalized_fields(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._notify = True
+
+        plugin._notify_auto_reply_result("account-a", {
+            "status": "success",
+            "fid": "141",
+            "tid": "909",
+            "title": "通知标题\n回帖成功。通知回复",
+            "reason": "回帖成功",
+            "reply_summary": "",
+        })
+
+        self.assertEqual(plugin.messages[-1]["title"], "98自动回帖成功")
+        text = plugin.messages[-1]["text"]
+        self.assertIn("标题：通知标题", text)
+        self.assertIn("回复：通知回复", text)
+        self.assertNotIn("标题：通知标题\n回帖成功", text)
 
     def test_signin_history_is_collapsible_by_default(self):
         plugin = _plugin_with_auto_reply_ui_data()
@@ -573,6 +879,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             "_has_auto_reply_risky_link",
             "_normalize_auto_reply_risk_text",
             "_has_auto_reply_contact_or_diversion_text",
+            "_split_auto_reply_fields",
             "_extract_auto_reply_post_authors",
             "_extract_auto_reply_logged_in_identity",
             "_extract_auto_reply_post_author_refs",
