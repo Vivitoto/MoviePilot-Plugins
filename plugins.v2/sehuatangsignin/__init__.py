@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.4"
+    plugin_version = "1.2.5"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -121,7 +121,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_window_start = "09:00"
     _auto_reply_window_end = "12:00"
     _auto_reply_forum_ids = "141,166"
-    _auto_reply_templates = "感谢分享，辛苦了。\n内容不错，支持一下。\n感谢楼主分享。"
+    _auto_reply_templates = ""
     _auto_reply_custom_prompt = ""
     _auto_reply_notify_template = "账号：{account}\n结果：{result}\n原因：{reason}\n标题：{title}\n回复：{reply}"
     _auto_reply_title_blacklist = ""
@@ -2819,7 +2819,6 @@ class SehuatangSignin(_PluginBase):
 
     def _build_auto_reply_polish_prompt(self, detail: Dict[str, Any], assessment: Dict[str, Any],
                                         rejected_reply: str = "", rejection_reason: str = "") -> str:
-        templates = self._parse_line_list(self._auto_reply_templates)
         custom_prompt = self._auto_reply_custom_prompt.strip()
         content = str(detail.get("content") or "")
         risk_reasons = assessment.get("risk_reasons") or []
@@ -2831,32 +2830,24 @@ class SehuatangSignin(_PluginBase):
                 "上一轮被本地校验拒绝，请修正后重新生成，不要解释。\n"
                 f"被拒回复：{json.dumps(rejected_reply[:80] or '-', ensure_ascii=False)}\n"
                 f"拒绝原因：{rejection_reason[:80] or '未说明'}\n"
-                "本轮必须避开该问题，换一种自然短评，只输出新回复。\n"
+                "本轮必须避开该问题，换一种自然说法，只输出新回复。\n"
             )
         return (
             "你只负责为已通过低风险评估的论坛帖子生成一条回帖，不再做适合性判断。\n"
             "必须只输出最终要提交的纯文本回复，不要输出 JSON、字段名、引号、Markdown、解释或思考过程。\n"
-            "回复要求：自然中文，像普通用户随手回复，低调短句，短优先，6-18 个中文字符最佳，最长 30 个字符。\n"
+            "回复要求：自然中文，像普通用户在论坛随手回复，口语化、低调，15-40 个中文字符，长短自然浮动。\n"
             "禁止 emoji、Markdown、URL、联系方式、AI/机器人/模型自称、道歉拒绝话术，不要重复标题或照抄标题。\n"
-            "电影/视频/影视/资源分享类帖子：优先写像刚看到标题/简介后的轻口语短评，语气松弛，不要像客服或模板。\n"
-            "这类回复可以轻轻贴合标题或正文透露出的氛围：简介是否清楚、题材/主题、画质/版本、演员/人物/主体、画风/风格；只根据已出现的信息，不编造剧情、演员、清晰度、评价。\n"
+            "根据标题和首楼正文里真实出现的信息有感而发，可以评价、可以感叹、可以带一点个人视角，\n"
+            "句式完全自由，不要刻意回避或刻意使用某一种句式。\n"
+            "不要编造帖子里没出现的信息（剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验）。\n"
             "明确不要写论坛套话：感谢分享、支持一下、路过看看、顶一下、楼主辛苦、辛苦了、前排支持。\n"
             "不要在回复里出现 下载、链接、地址、资源 等索取或交付资源词。\n"
             "不要复述片名、标题、番号或专名；需要贴合内容时，用泛化说法，不照搬原文名词。\n"
-            "所有回复必须只使用标题和首楼正文中的可见线索，不要引入帖子里没出现的信息。\n"
-            "不得编造剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验。\n"
-            "必须从标题/正文中挑一个可见线索再泛化成短评；没有对应线索就不要写该方向。\n"
-            "如果标题和正文内容太薄，选择中性、内容有依据的短句，例如标题信息挺直观、看介绍还算清楚，不要假装看过细节。\n"
-            "避免空洞泛泛的库存短语，即使未命中禁用词，也不要输出不错不错、看起来不错、可以可以、很棒、收藏了这类无可见依据的话。\n"
-            "影视/视频/资源分享帖的合格方向示例（只看方向，禁止逐字套用）：简介看着挺清楚 / 这个题材挺有意思 / 预览感觉还可以 / 画面风格挺顺眼 / 介绍写得蛮直观。\n"
-            "这些示例不是模板；请根据帖子已出现的信息换一种说法。\n"
             "无效示例（绝对不要输出）：感谢分享 / 支持一下 / 路过看看 / 顶一下 / 楼主辛苦了 / 求个资源 / 有下载吗 / 看看链接 / 地址发下 / 磁力有吗 / 网盘在哪。\n"
             "禁止出现的套话和资源词：感谢分享、谢谢分享、感谢楼主、支持一下、路过看看、顶一下、帮顶、前排支持、楼主辛苦、辛苦了、下载、链接、地址、资源、网盘、磁力、私发、发我、求资源。\n"
             "标点根据回复内容自然选择：可以不加句末标点，也可以用。！？~等少量常见标点或一个普通空格作停顿，但不要固定套用某一种。\n"
-            "仍然要短、低调、不刷屏，不添加奇怪符号或颜文字。\n"
-            "尽量避免直接照抄常见模板，参考模板只用于把握语气。\n"
+            "仍然要低调、不刷屏，不添加奇怪符号或颜文字。\n"
             f"{retry_guidance}"
-            f"参考模板：{json.dumps(templates, ensure_ascii=False)}\n"
             f"补充要求：{custom_prompt or '无'}\n"
             f"低风险原因：{json.dumps(risk_reasons, ensure_ascii=False)}\n"
             f"版块 ID：{detail.get('fid') or '-'}\n"

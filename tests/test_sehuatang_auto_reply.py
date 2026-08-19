@@ -453,9 +453,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.4"', source)
-        self.assertEqual(sehuatang["version"], "1.2.4")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.4"])
+        self.assertIn('plugin_version = "1.2.5"', source)
+        self.assertEqual(sehuatang["version"], "1.2.5")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.5"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -1560,8 +1560,8 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("必须只输出最终要提交的纯文本回复", polish_body)
         self.assertIn("不要输出 JSON、字段名、引号", polish_body)
         self.assertNotIn('{\\"reply\\": \\"...\\"}', polish_body)
-        self.assertIn("6-18 个中文字符最佳", polish_body)
-        self.assertIn("最长 30 个字符", polish_body)
+        self.assertIn("15-40 个中文字符", polish_body)
+        self.assertIn("长短自然浮动", polish_body)
         self.assertIn("禁止 emoji、Markdown、URL", polish_body)
         self.assertIn("联系方式", polish_body)
         self.assertIn("AI/机器人/模型自称", polish_body)
@@ -1570,39 +1570,23 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("一个普通空格作停顿", polish_body)
         self.assertIn("。！？~等少量常见标点", polish_body)
         self.assertIn("不要固定套用某一种", polish_body)
-        self.assertIn("短、低调、不刷屏", polish_body)
+        self.assertIn("低调、不刷屏", polish_body)
         self.assertIn("不添加奇怪符号或颜文字", polish_body)
         self.assertIn("不要重复标题", polish_body)
         for policy in [
-            "电影/视频/影视/资源分享类帖子",
-            "轻口语短评",
-            "语气松弛",
-            "不要像客服或模板",
-            "简介是否清楚、题材/主题、画质/版本、演员/人物/主体、画风/风格",
-            "只根据已出现的信息",
-            "不编造剧情、演员、清晰度、评价",
-            "所有回复必须只使用标题和首楼正文中的可见线索",
-            "不要引入帖子里没出现的信息",
-            "不得编造剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验",
-            "必须从标题/正文中挑一个可见线索再泛化成短评",
-            "没有对应线索就不要写该方向",
-            "如果标题和正文内容太薄",
-            "选择中性、内容有依据的短句",
-            "不要假装看过细节",
-            "避免空洞泛泛的库存短语",
-            "即使未命中禁用词",
-            "不错不错、看起来不错、可以可以、很棒、收藏了",
+            "像普通用户在论坛随手回复",
+            "口语化",
+            "根据标题和首楼正文里真实出现的信息有感而发",
+            "可以评价、可以感叹、可以带一点个人视角",
+            "句式完全自由",
+            "不要刻意回避或刻意使用某一种句式",
+            "不要编造帖子里没出现的信息",
+            "剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验",
             "明确不要写论坛套话",
             "感谢分享、支持一下、路过看看、顶一下、楼主辛苦、辛苦了、前排支持",
             "不要在回复里出现 下载、链接、地址、资源",
             "不要复述片名、标题、番号或专名",
             "用泛化说法，不照搬原文名词",
-            "合格方向示例",
-            "禁止逐字套用",
-            "简介看着挺清楚",
-            "这个题材挺有意思",
-            "预览感觉还可以",
-            "这些示例不是模板",
             "无效示例",
             "求个资源",
             "有下载吗",
