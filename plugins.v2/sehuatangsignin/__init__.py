@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -2357,9 +2357,17 @@ class SehuatangSignin(_PluginBase):
             host = (host or "").lower().lstrip(".")
             return any(host == domain or host.endswith(f".{domain}") for domain in risky_domains)
 
+        def parse_host(raw_url: str) -> Optional[str]:
+            try:
+                parsed = urlparse(str(raw_url or "").strip())
+                return (parsed.hostname or "").lower().lstrip(".")
+            except ValueError:
+                return None
+
         for raw_url in urls:
-            parsed = urlparse(raw_url.strip())
-            host = (parsed.hostname or "").lower().lstrip(".")
+            host = parse_host(raw_url)
+            if host is None:
+                return True
             if host and is_risky_host(host):
                 return True
 

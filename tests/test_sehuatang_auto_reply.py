@@ -453,9 +453,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.5"', source)
-        self.assertEqual(sehuatang["version"], "1.2.5")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.5"])
+        self.assertIn('plugin_version = "1.2.6"', source)
+        self.assertEqual(sehuatang["version"], "1.2.6")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.6"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -1411,6 +1411,23 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("replysubmit=yes", fastpost_body)
         self.assertIn('"url": f"{base_url.rstrip(\'/\')}/forum.php?mod=viewthread&tid={tid}"', extract_body)
         self.assertIn('"source_url": urljoin', extract_body)
+
+    def test_auto_reply_risky_link_handles_invalid_bracketed_hosts(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        has_risky_link = plugin_module.SehuatangSignin._has_auto_reply_risky_link
+
+        cases = [
+            '<a href="http://[幽玄花]">详情</a>',
+            '<img src="//[Qiweny874]/avatar.jpg">',
+            '提示文本 http://[幽玄花] 请查看',
+            '<a href="https://[not-an-ipv6]/detail">非 IP 字符串</a>',
+            '<a href="ftp://[user_123]/file">下划线 ID</a>',
+            '<img src="//[中文-abc-123]/avatar.jpg">混合昵称',
+            '<a href="https://[2001:db8::zzz]/detail">非法 IPv6 文本</a>',
+        ]
+        for html in cases:
+            with self.subTest(html=html):
+                self.assertTrue(has_risky_link(html, "https://sehuatang.net"))
 
     def test_auto_reply_run_path_does_not_call_signin_or_captcha_flow(self):
         source = _source()
