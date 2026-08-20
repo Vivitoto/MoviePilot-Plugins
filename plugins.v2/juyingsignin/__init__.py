@@ -25,7 +25,7 @@ class JuyingSignIn(_PluginBase):
     plugin_name = "聚影签到自用"
     plugin_desc = "自动登录聚影并完成每日签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/juyingsignin.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "juyingsignin_"
@@ -373,6 +373,7 @@ class JuyingSignIn(_PluginBase):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
         })
         if self._use_proxy and self._proxy_url:
             session.proxies.update({"http": self._proxy_url, "https": self._proxy_url})
@@ -412,41 +413,207 @@ class JuyingSignIn(_PluginBase):
                 f"{action}接口不可用（HTTP 404），站点 API 端点可能已变更或下线，无法通过重试恢复：{url}"
             ) from error
 
-    def _login(self, session: requests.Session) -> Tuple[str, Dict[str, Any]]:
+    @staticmethod
+    def _cookie_value(session: requests.Session, *names: str) -> str:
+        cookies = getattr(session, "cookies", None)
+        if not cookies:
+            return ""
+        for name in names:
+            try:
+                value = cookies.get(name)
+            except Exception:
+                value = None
+            if value:
+                return str(value)
+        return ""
+
+    @staticmethod
+    def _response_header(response: requests.Response, name: str) -> str:
+        headers = getattr(response, "headers", None) or {}
+        try:
+            value = headers.get(name)
+        except Exception:
+            value = None
+        if value:
+            return str(value)
+        lower_name = name.lower()
+        try:
+            for key, item in headers.items():
+                if str(key).lower() == lower_name and item:
+                    return str(item)
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _decode_json(response: requests.Response, action: str) -> Dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise RuntimeError(f"{action}响应不是有效 JSON") from e
+        if not isinstance(data, dict):
+            raise RuntimeError(f"{action}响应不是 JSON 对象")
+        return data
+
+    @staticmethod
+    def _checked_today(stats: Dict[str, Any]) -> bool:
+        value = stats.get("checked_today")
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "已签到", "今日已签到"}
+        return bool(value)
+
+    @staticmethod
+    def _first_present(*values: Any, default: Any = None) -> Any:
+        for value in values:
+            if value not in (None, ""):
+                return value
+        return default
+
+    def _get_csrf_token(self, session: requests.Session) -> str:
+        token = self._cookie_value(session, "csrftoken", "XSRF-TOKEN")
+        if token:
+            return token
+
+        for path in ("/login", "/"):
+            url = self._api_url(path)
+            try:
+                resp = session.get(url, timeout=self._timeout)
+                resp.raise_for_status()
+                token = self._cookie_value(session, "csrftoken", "XSRF-TOKEN")
+                if token:
+                    return token
+            except RequestException as e:
+                if self._is_certificate_config_error(e):
+                    self._raise_non_retryable_request_error("获取CSRF", e)
+                self._log_step(f"获取 CSRF 失败，继续尝试：{url}，{e}")
+        return ""
+
+    def _request_authed(
+        self,
+        session: requests.Session,
+        method: str,
+        path: str,
+        token: str,
+        csrf_token: str = "",
+        referer: str = "/profile",
+        action: str = "请求",
+    ) -> Dict[str, Any]:
+        headers = {
+            "X-App-User-Token": token,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{self._base_url}{referer}",
+        }
+        if csrf_token:
+            headers["X-CSRFToken"] = csrf_token
+        if method.upper() != "GET":
+            headers["Origin"] = self._base_url
+            headers["Content-Type"] = "application/json"
+
+        try:
+            resp = session.request(
+                method=method.upper(),
+                url=self._api_url(path),
+                headers=headers,
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            data = self._decode_json(resp, action)
+        except RequestException as e:
+            self._raise_non_retryable_request_error(action, e)
+            raise RuntimeError(f"{action}请求失败：{e}") from e
+
+        refreshed_token = self._response_header(resp, "X-Refreshed-Token")
+        data["_token"] = refreshed_token or token
+        return data
+
+    @staticmethod
+    def _profile_user(profile: Dict[str, Any]) -> Dict[str, Any]:
+        user = profile.get("user") if isinstance(profile, dict) else {}
+        return user if isinstance(user, dict) else {}
+
+    def _save_user_info(self, *users: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for user in users:
+            if not isinstance(user, dict):
+                continue
+            for key, value in user.items():
+                if value not in (None, ""):
+                    merged[key] = value
+
+        snapshot = {
+            "username": merged.get("username") or self._username,
+            "level_name": merged.get("level_name") or merged.get("level") or "-",
+        }
+        for key in ("points", "checkin_days", "id", "uid", "email", "avatar"):
+            if key in merged:
+                snapshot[key] = merged.get(key)
+        self.save_data(self._user_info_key, snapshot)
+        return snapshot
+
+    def _login(self, session: requests.Session) -> Tuple[str, Dict[str, Any], str]:
+        csrf_token = self._get_csrf_token(session)
+        headers = {
+            "Content-Type": "application/json",
+            "Origin": self._base_url,
+            "Referer": f"{self._base_url}/login",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if csrf_token:
+            headers["X-CSRFToken"] = csrf_token
         url = self._api_url("/api/app/login/")
         try:
             resp = session.post(
                 url,
                 json={"username": self._username, "password": self._password},
+                headers=headers,
                 timeout=self._timeout,
             )
             resp.raise_for_status()
-            data = resp.json()
+            data = self._decode_json(resp, "登录")
         except RequestException as e:
             self._raise_non_retryable_request_error("登录", e)
             raise RuntimeError(f"登录请求失败：{e}") from e
-        except ValueError as e:
-            raise RuntimeError("登录响应不是有效 JSON") from e
 
         if data.get("status") != "success":
             raise RuntimeError(data.get("message") or f"登录失败：{data}")
         token = data.get("token")
         if not token:
             raise RuntimeError("登录成功但接口未返回 token")
-        return str(token), data.get("user") or {}
+        user = data.get("user") or {}
+        return str(token), user if isinstance(user, dict) else {}, csrf_token
 
-    def _checkin(self, session: requests.Session, token: str) -> Dict[str, Any]:
-        headers = {"x-app-user-token": token}
-        url = self._api_url("/api/app/checkin/do/")
-        try:
-            resp = session.post(url, headers=headers, timeout=self._timeout)
-            resp.raise_for_status()
-            return resp.json()
-        except RequestException as e:
-            self._raise_non_retryable_request_error("签到", e)
-            raise RuntimeError(f"签到请求失败：{e}") from e
-        except ValueError as e:
-            raise RuntimeError("签到响应不是有效 JSON") from e
+    def _checkin_stats(self, session: requests.Session, token: str, csrf_token: str) -> Dict[str, Any]:
+        return self._request_authed(
+            session=session,
+            method="GET",
+            path="/api/app/checkin/stats/",
+            token=token,
+            csrf_token=csrf_token,
+            referer="/profile",
+            action="获取签到状态",
+        )
+
+    def _profile(self, session: requests.Session, token: str, csrf_token: str) -> Dict[str, Any]:
+        return self._request_authed(
+            session=session,
+            method="GET",
+            path="/api/app/profile/",
+            token=token,
+            csrf_token=csrf_token,
+            referer="/profile",
+            action="获取用户资料",
+        )
+
+    def _checkin(self, session: requests.Session, token: str, csrf_token: str = "") -> Dict[str, Any]:
+        return self._request_authed(
+            session=session,
+            method="POST",
+            path="/api/app/checkin/do/",
+            token=token,
+            csrf_token=csrf_token,
+            referer="/profile",
+            action="签到",
+        )
 
     def _log_step(self, message: str):
         logger.info(f"{self.plugin_name}：{message}")
@@ -589,23 +756,87 @@ class JuyingSignIn(_PluginBase):
             session = self._session()
             steps.append(f"🌐 已创建会话，代理：{self._proxy_url if self._use_proxy and self._proxy_url else '未启用'}")
 
-            token, user_info = self._login(session)
+            token, login_user, csrf_token = self._login(session)
             result["login_status"] = "成功"
-            username = user_info.get("username") or self._username
+            user_snapshot = self._save_user_info(login_user)
+            username = user_snapshot.get("username") or self._username
             result["username"] = username
-            result["level_name"] = user_info.get("level_name") or "-"
-            self.save_data(self._user_info_key, {
-                "username": username,
-                "level_name": result["level_name"],
-            })
+            result["level_name"] = user_snapshot.get("level_name") or "-"
             steps.append(f"🔐 登录成功：{username}")
             self._log_step(f"登录成功：{username}")
 
-            checkin_json = self._checkin(session, token)
+            stats = self._checkin_stats(session, token, csrf_token)
+            token = stats.get("_token", token)
+            if stats.get("status") != "success":
+                raise RuntimeError(stats.get("message") or "获取签到状态失败")
+            steps.append("📊 已获取签到状态")
+
+            profile = self._profile(session, token, csrf_token)
+            token = profile.get("_token", token)
+            profile_user = self._profile_user(profile)
+            user_snapshot = self._save_user_info(login_user, profile_user)
+            result.update({
+                "username": user_snapshot.get("username") or self._username,
+                "level_name": user_snapshot.get("level_name") or "-",
+                "points": user_snapshot.get("points"),
+                "checkin_days": user_snapshot.get("checkin_days"),
+            })
+            steps.append(f"👤 已获取用户资料：{result['username']}")
+
+            if self._checked_today(stats):
+                result.update({
+                    "message": stats.get("message") or "今日已签到",
+                    "points_awarded": self._first_present(stats.get("reward_points"), default=0),
+                    "total_days": self._first_present(
+                        stats.get("my_total_days"),
+                        user_snapshot.get("checkin_days"),
+                        default=0,
+                    ),
+                    "signin_status": "今日已签到",
+                    "result_label": "已签到",
+                    "signed_today": True,
+                    "finished": True,
+                })
+                steps.append("ℹ️ 今日已签到，跳过签到提交")
+                self._log_step("今日已签到，跳过签到提交")
+                self._save_result(result)
+                if self._notify:
+                    self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
+                self._handle_retry_after_result(result, "今日已签到")
+                return result
+
+            checkin_json = self._checkin(session, token, csrf_token)
+            token = checkin_json.get("_token", token)
             status = str(checkin_json.get("status") or "").lower()
             message = checkin_json.get("message") or ("签到成功" if status == "success" else "签到失败或今日已签到")
-            points = checkin_json.get("points_awarded", 0)
-            total_days = checkin_json.get("my_total_days", 0)
+            raw_text = str(checkin_json)
+            already_signed = any(keyword in raw_text for keyword in ["已签到", "重复", "今日", "已经签到"])
+
+            if status == "success" or already_signed:
+                try:
+                    profile_after = self._profile(session, token, csrf_token)
+                    token = profile_after.get("_token", token)
+                    user_snapshot = self._save_user_info(login_user, profile_user, self._profile_user(profile_after))
+                    result.update({
+                        "username": user_snapshot.get("username") or self._username,
+                        "level_name": user_snapshot.get("level_name") or "-",
+                        "points": user_snapshot.get("points"),
+                        "checkin_days": user_snapshot.get("checkin_days"),
+                    })
+                    steps.append(f"👤 签到后已刷新用户资料：{result['username']}")
+                except NonRetryableSiteError:
+                    raise
+                except Exception as profile_error:
+                    steps.append(f"⚠️ 签到后刷新用户资料失败：{profile_error}")
+                    self._log_step(f"签到后刷新用户资料失败：{profile_error}")
+
+            points = self._first_present(checkin_json.get("points_awarded"), stats.get("reward_points"), default=0)
+            total_days = self._first_present(
+                checkin_json.get("my_total_days"),
+                user_snapshot.get("checkin_days"),
+                stats.get("my_total_days"),
+                default=0,
+            )
 
             result.update({
                 "message": message,
@@ -618,8 +849,6 @@ class JuyingSignIn(_PluginBase):
                 steps.append(f"✅ 签到成功：+{points} 分，累计 {total_days} 天")
                 self._log_step(f"签到成功：{message}")
             else:
-                raw_text = str(checkin_json)
-                already_signed = any(keyword in raw_text for keyword in ["已签到", "重复", "今日", "已经签到"])
                 result.update({
                     "signin_status": "今日已签到" if already_signed else "失败",
                     "result_label": "已签到" if already_signed else "失败",
