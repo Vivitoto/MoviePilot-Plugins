@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1644,31 +1644,35 @@ class SehuatangSignin(_PluginBase):
                 marker_match = re.search(rf"(^|\n)\s*{re.escape(marker)}", title)
                 if not marker_match:
                     continue
-                if reason not in generic_reason_values or reply_summary:
-                    continue
                 marker_index = marker_match.start()
                 suffix_index = marker_match.end()
                 suffix = title[suffix_index:].strip()
+                can_fill_reason = reason in generic_reason_values
+                can_fill_reply = not reply_summary
                 if prefix in success_result_prefixes:
-                    if suffix and not reply_summary:
+                    if suffix and can_fill_reply:
                         reply_summary = suffix
-                    if reason in generic_reason_values:
+                    if can_fill_reason:
                         reason = prefix
                 elif prefix in failure_result_prefixes:
-                    if suffix and reason in generic_reason_values:
+                    if suffix and can_fill_reason:
                         reason = suffix
-                    elif reason in generic_reason_values:
+                    elif can_fill_reason:
                         reason = prefix
                 elif "回复：" in marker:
-                    if suffix and not reply_summary:
+                    if suffix and can_fill_reply:
                         reply_summary = suffix
-                    if not reason:
+                    if can_fill_reason:
                         reason = prefix
                 else:
-                    if suffix and reason in generic_reason_values:
+                    if suffix and can_fill_reason:
                         reason = suffix
-                    elif not reason:
+                    elif can_fill_reason:
                         reason = prefix
+                # Always strip the result line from title once it is detected.
+                # Older saved records may already have reason/reply_summary split
+                # into their own fields; the previous guard skipped cleanup in that
+                # case, leaving “回帖成功。回复内容” visible in the 标题列.
                 title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip()
                 matched = True
                 break
@@ -2825,11 +2829,131 @@ class SehuatangSignin(_PluginBase):
             f"首楼正文完整内容：{content or '-'}"
         )
 
+    @classmethod
+    def _auto_reply_compact_text(cls, value: Any) -> str:
+        text = cls._strip_html(str(value or ""))
+        text = unicodedata.normalize("NFKC", text).lower()
+        return re.sub(r"[\s，,。.!！?？~～、；;：:/\\｜|（）()【】\[\]{}《》<>\-—_]+", "", text)
+
+    @classmethod
+    def _auto_reply_style_signature(cls, value: Any) -> str:
+        """Return a coarse sentence-pattern signature to avoid repetitive replies."""
+        compact = cls._auto_reply_compact_text(value)
+        if not compact:
+            return ""
+        normalized = re.sub(r"\d+(?:\.\d+)?(?:g|gb|m|mb|t|tb|部|集|p)?", "#", compact, flags=re.I)
+        normalized = re.sub(r"[a-z]{2,}[-_a-z0-9]*", "x", normalized, flags=re.I)
+        normalized = re.sub(r"#+", "#", normalized)
+
+        # Generic features only: sentence opening/ending, common degree words,
+        # and broad action/evaluation classes. This catches repeated frames
+        # without tying the rule to one specific symptom.
+        features: List[str] = []
+        for token in ["确实", "看着", "这种", "这个", "这类", "挺", "还挺", "真", "比较", "不少", "方便", "难得"]:
+            if token in normalized:
+                features.append(f"w:{token}")
+        action_groups = [
+            ("organize", ["整理", "收集", "归类", "分类", "标注", "标得", "目录", "列得", "收录"]),
+            ("amount", ["量", "体量", "够多", "挺多", "很足", "挺足", "不少", "#"]),
+            ("complete", ["完整", "齐全", "全", "合集", "成套"]),
+            ("easy", ["方便", "好找", "找起来", "查找", "翻起来", "省事"]),
+            ("quality", ["清楚", "明白", "细", "不错", "可以", "扎实", "水准", "质量", "成色"]),
+            ("effort", ["费", "花时间", "用心", "真爱", "不容易", "功夫", "工夫"]),
+        ]
+        for name, tokens in action_groups:
+            if any(token in normalized for token in tokens):
+                features.append(f"a:{name}")
+        if len(features) < 2:
+            return ""
+        length_bucket = min(5, max(1, len(normalized) // 6))
+        prefix = normalized[:3] if len(normalized) >= 3 else normalized
+        suffix = normalized[-3:] if len(normalized) >= 3 else normalized
+        return "|".join([f"l:{length_bucket}", f"p:{prefix}", f"s:{suffix}"] + sorted(set(features)))
+
+    @staticmethod
+    def _auto_reply_char_ngrams(text: str, n: int = 2) -> set:
+        if len(text) < n:
+            return {text} if text else set()
+        return {text[idx:idx + n] for idx in range(0, len(text) - n + 1)}
+
+    @classmethod
+    def _auto_reply_text_similarity(cls, left: Any, right: Any) -> float:
+        left_text = cls._auto_reply_compact_text(left)
+        right_text = cls._auto_reply_compact_text(right)
+        if not left_text or not right_text:
+            return 0.0
+        left_grams = cls._auto_reply_char_ngrams(left_text, 2)
+        right_grams = cls._auto_reply_char_ngrams(right_text, 2)
+        if not left_grams or not right_grams:
+            return 0.0
+        return len(left_grams & right_grams) / max(1, len(left_grams | right_grams))
+
+    @classmethod
+    def _auto_reply_style_similarity(cls, left: Any, right: Any) -> int:
+        left_signature = cls._auto_reply_style_signature(left)
+        right_signature = cls._auto_reply_style_signature(right)
+        if not left_signature or not right_signature:
+            return 0
+        left_parts = set(left_signature.split("|"))
+        right_parts = set(right_signature.split("|"))
+        return len(left_parts & right_parts)
+
+    def _recent_auto_reply_texts(self, limit: int = 4) -> List[str]:
+        history = self.get_data(self._auto_reply_history_key) or []
+        if not isinstance(history, list):
+            return []
+        replies: List[str] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            if self._auto_reply_result_status(item) != "success":
+                continue
+            _, _, reply_summary = self._split_auto_reply_fields(item, display=True)
+            reply = str(reply_summary or item.get("reply_summary") or item.get("reply") or "").strip()
+            if not reply or reply == "-":
+                continue
+            replies.append(reply[:60])
+            if len(replies) >= limit:
+                break
+        return replies
+
+    @classmethod
+    def _auto_reply_recent_style_repeat_reason(cls, reply: str, recent_replies: List[str]) -> str:
+        reply_compact = cls._auto_reply_compact_text(reply)
+        if not reply_compact or not recent_replies:
+            return ""
+        for recent in recent_replies[:4]:
+            recent_compact = cls._auto_reply_compact_text(recent)
+            if not recent_compact:
+                continue
+            if reply_compact == recent_compact:
+                return "近期已用过完全相同回复"
+            if len(reply_compact) >= 8 and (reply_compact in recent_compact or recent_compact in reply_compact):
+                return "近期已用过相近回复"
+
+        for recent in recent_replies[:4]:
+            if cls._auto_reply_text_similarity(reply, recent) >= 0.42:
+                return "近期已用过相似措辞或句式"
+            if cls._auto_reply_style_similarity(reply, recent) >= 6:
+                return "近期已用过高度相似的句式骨架"
+
+        style_hits = sum(
+            1 for recent in recent_replies[:4]
+            if cls._auto_reply_style_similarity(reply, recent) >= 4
+        )
+        if style_hits >= 2:
+            return "近期已多次使用相似句式骨架或评价套路"
+        return ""
+
     def _build_auto_reply_polish_prompt(self, detail: Dict[str, Any], assessment: Dict[str, Any],
                                         rejected_reply: str = "", rejection_reason: str = "") -> str:
         custom_prompt = self._auto_reply_custom_prompt.strip()
         content = str(detail.get("content") or "")
         risk_reasons = assessment.get("risk_reasons") or []
+        recent_replies = self._recent_auto_reply_texts(4)
+        recent_reply_text = "\n".join(
+            f"- {reply}" for reply in recent_replies
+        ) or "- 无"
         rejected_reply = re.sub(r"\s+", " ", self._strip_html(str(rejected_reply or ""))).strip()
         rejection_reason = re.sub(r"\s+", " ", str(rejection_reason or "")).strip()
         retry_guidance = ""
@@ -2847,6 +2971,8 @@ class SehuatangSignin(_PluginBase):
             "禁止 emoji、Markdown、URL、联系方式、AI/机器人/模型自称、道歉拒绝话术，不要重复标题或照抄标题。\n"
             "根据标题和首楼正文里真实出现的信息有感而发，可以评价、可以感叹、可以带一点个人视角，\n"
             "句式完全自由，不要刻意回避或刻意使用某一种句式。\n"
+            "必须避开近期已用回复的语义、句式骨架和评价套路，不要只是替换几个词复述同一种回复。\n"
+            "优先换观察角度、句子开头、语气重心和落点；避免连续使用“挺/确实/看着 + 泛泛评价 + 方便/完整/整理/不错”这类相近框架。\n"
             "不要编造帖子里没出现的信息（剧情、演员/人物、导演、字幕、画质、版本、时长、评分、资源质量或观看体验）。\n"
             "明确不要写论坛套话：感谢分享、支持一下、路过看看、顶一下、楼主辛苦、辛苦了、前排支持。\n"
             "不要在回复里出现 下载、链接、地址、资源 等索取或交付资源词。\n"
@@ -2856,6 +2982,7 @@ class SehuatangSignin(_PluginBase):
             "标点根据回复内容自然选择：可以不加句末标点，也可以用。！？~等少量常见标点或一个普通空格作停顿，但不要固定套用某一种。\n"
             "仍然要低调、不刷屏，不添加奇怪符号或颜文字。\n"
             f"{retry_guidance}"
+            f"近期已用回复（必须避开相似语义、句式骨架和评价套路）：\n{recent_reply_text}\n"
             f"补充要求：{custom_prompt or '无'}\n"
             f"低风险原因：{json.dumps(risk_reasons, ensure_ascii=False)}\n"
             f"版块 ID：{detail.get('fid') or '-'}\n"
@@ -3017,6 +3144,9 @@ class SehuatangSignin(_PluginBase):
             template_norm = re.sub(r"\s+", "", self._strip_html(template)).strip(" \"'“”‘’`").rstrip("。.!！")
             if reply_norm and reply_norm == template_norm:
                 return None, "照抄参考模板"
+        recent_repeat_reason = self._auto_reply_recent_style_repeat_reason(reply, self._recent_auto_reply_texts(4))
+        if recent_repeat_reason:
+            return None, recent_repeat_reason
         return reply, ""
 
     def _submit_auto_reply(self, fs_sid: str, cookies: list, detail: Dict[str, Any], reply: str,
@@ -3481,12 +3611,24 @@ class SehuatangSignin(_PluginBase):
 
         def truncate_cell(text: Any, max_width: int, nowrap: bool = False) -> Dict[str, Any]:
             raw_text = str(text if text not in (None, "") else "-")
-            style = f"max-width:{max_width}px;overflow:hidden;text-overflow:ellipsis;"
+            # Keep <td> as a real table-cell. Applying display:-webkit-box to the
+            # td itself breaks table layout in the MoviePilot/Vuetify renderer and
+            # can make the next cell (回帖结果) appear visually inside the 标题列.
+            td_style = f"max-width:{max_width}px;"
+            inner_style = "overflow:hidden;text-overflow:ellipsis;"
             if nowrap:
-                style += "white-space:nowrap;"
+                inner_style += "white-space:nowrap;"
             else:
-                style += "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;"
-            return {'component': 'td', 'props': {'class': 'text-truncate', 'style': style, 'title': raw_text}, 'text': raw_text}
+                inner_style += "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;"
+            return {
+                'component': 'td',
+                'props': {'style': td_style, 'title': raw_text},
+                'content': [{
+                    'component': 'div',
+                    'props': {'class': 'text-truncate', 'style': inner_style},
+                    'text': raw_text,
+                }],
+            }
 
         def auto_reply_display_fields(item: Dict[str, Any]) -> Tuple[str, str, str]:
             return self._split_auto_reply_fields(item, display=True)
