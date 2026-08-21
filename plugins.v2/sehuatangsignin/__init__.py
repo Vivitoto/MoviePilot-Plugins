@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.7"
+    plugin_version = "1.2.8"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -3653,20 +3653,6 @@ class SehuatangSignin(_PluginBase):
                 truncate_cell(forum_topic, 140, nowrap=True),
                 truncate_cell(title, 260),
                 truncate_cell(auto_reply_result_text(item, reason_text, reply_summary), 360),
-            ])
-
-        for job in today_jobs[:20]:
-            if not isinstance(job, dict):
-                continue
-            status = str(job.get("status") or "pending")
-            topic_text = f"版块:{forum_ids_text} / 尝试:{job.get('attempt_index') or 1}"
-            detail_rows.append([
-                truncate_cell(job.get('account', '-'), 120, nowrap=True),
-                {'component': 'td', 'props': {'style': 'white-space:nowrap;'}, 'content': [status_chip(status)]},
-                truncate_cell(job.get('run_at', '-'), 170, nowrap=True),
-                truncate_cell(topic_text, 140, nowrap=True),
-                truncate_cell('自动回帖计划', 260),
-                truncate_cell(job.get('message', '') or plan.get('message') or '等待执行', 360),
             ])
 
         plan_text = f"版块：{forum_ids_text}｜窗口：{plan.get('window_start') or '-'}-{plan.get('window_end') or '-'}｜{plan.get('message') or '今日计划'}"
