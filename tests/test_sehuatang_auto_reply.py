@@ -5,6 +5,7 @@ import sys
 import threading
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 from unittest.mock import patch
@@ -453,9 +454,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.6"', source)
-        self.assertEqual(sehuatang["version"], "1.2.6")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.6"])
+        self.assertIn('plugin_version = "1.2.9"', source)
+        self.assertEqual(sehuatang["version"], "1.2.9")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.9"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -1258,10 +1259,11 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("auto_reply_max_attempts_per_day", init_body)
         self.assertIn("min(10", init_body)
         self.assertIn("每日最大回帖尝试次数", form_source)
-        self.assertIn("account_times: List[datetime] = []", plan_body)
+        self.assertIn("scheduled_times: List[datetime] = []", plan_body)
+        self.assertIn("time_respects_global_gap", plan_body)
+        self.assertIn("scheduled_times.append(run_at)", plan_body)
         self.assertIn("account_times.sort()", plan_body)
         self.assertIn("enumerate(account_times, start=1)", plan_body)
-        self.assertIn("for item in account_times", plan_body)
         self.assertIn('"max_attempts_per_day": max_attempts', plan_body)
         self.assertIn('job.get("status") not in ("scheduled", "pending", "")', schedule_body)
         self.assertIn("_auto_reply_job_id", schedule_body)
@@ -1271,6 +1273,28 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn('job["status"] = "skipped"', skip_body)
         self.assertIn("self._scheduler.remove_job(job_id)", skip_body)
         self.assertIn("今日已成功回帖，后续尝试跳过", skip_body)
+
+    def test_auto_reply_min_interval_applies_globally_across_accounts(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._accounts = [
+            {"name": "diodio", "cookie_str": "a=b"},
+            {"name": "dontknowwhy", "cookie_str": "c=d"},
+        ]
+        plugin._auto_reply_min_interval_minutes = 10
+        plugin._auto_reply_max_attempts_per_day = 1
+        tz = plugin_module.pytz.timezone("UTC")
+        now = tz.localize(datetime(2026, 8, 25, 8, 59, 0))
+        start_at = tz.localize(datetime(2026, 8, 25, 9, 0, 0))
+        end_at = tz.localize(datetime(2026, 8, 25, 10, 0, 0))
+
+        with patch.object(plugin_module.SehuatangSignin, "_auto_reply_now", return_value=now), \
+                patch.object(plugin_module.random, "randint", side_effect=[0, 60, 600]):
+            plan = plugin._generate_auto_reply_plan(start_at, end_at, ["141"])
+
+        run_times = [plugin._parse_auto_reply_datetime(job["run_at"]) for job in plan["jobs"]]
+        self.assertEqual(len(run_times), 2)
+        self.assertGreaterEqual(abs((run_times[1] - run_times[0]).total_seconds()), 10 * 60)
 
     def test_auto_reply_hard_filters_old_or_unknown_detail_time(self):
         source = _source()

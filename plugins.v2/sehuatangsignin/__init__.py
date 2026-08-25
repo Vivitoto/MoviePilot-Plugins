@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.2.8"
+    plugin_version = "1.2.9"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -1037,6 +1037,21 @@ class SehuatangSignin(_PluginBase):
         max_attempts = max(1, int(self._auto_reply_max_attempts_per_day or 1))
         span_seconds = max(0, int((end_at - start_at).total_seconds()))
         jobs = []
+        scheduled_times: List[datetime] = []
+
+        def time_respects_global_gap(candidate: datetime) -> bool:
+            return not min_gap or all(abs((candidate - item).total_seconds()) >= min_gap for item in scheduled_times)
+
+        def fallback_time_with_global_gap() -> Optional[datetime]:
+            if span_seconds <= 0:
+                return start_at if time_respects_global_gap(start_at) else None
+            step = max(1, min(60, min_gap or 60))
+            for offset in range(0, span_seconds + 1, step):
+                candidate = start_at + timedelta(seconds=offset)
+                if time_respects_global_gap(candidate):
+                    return candidate
+            end_candidate = start_at + timedelta(seconds=span_seconds)
+            return end_candidate if time_respects_global_gap(end_candidate) else None
 
         for account_index, _, account_id in indexed_accounts:
             account_times: List[datetime] = []
@@ -1045,12 +1060,15 @@ class SehuatangSignin(_PluginBase):
                 if span_seconds > 0:
                     for _ in range(120):
                         candidate = start_at + timedelta(seconds=random.randint(0, span_seconds))
-                        if not min_gap or all(abs((candidate - item).total_seconds()) >= min_gap for item in account_times):
+                        if time_respects_global_gap(candidate):
                             run_at = candidate
                             break
                     else:
-                        run_at = start_at + timedelta(seconds=random.randint(0, span_seconds))
+                        run_at = fallback_time_with_global_gap() or start_at + timedelta(seconds=random.randint(0, span_seconds))
+                elif not time_respects_global_gap(run_at):
+                    run_at = fallback_time_with_global_gap() or run_at
                 account_times.append(run_at)
+                scheduled_times.append(run_at)
             account_times.sort()
             for attempt_index, run_at in enumerate(account_times, start=1):
                 jobs.append({
@@ -1649,33 +1667,39 @@ class SehuatangSignin(_PluginBase):
                 suffix = title[suffix_index:].strip()
                 can_fill_reason = reason in generic_reason_values
                 can_fill_reply = not reply_summary
+                filled_from_marker = False
                 if prefix in success_result_prefixes:
                     if suffix and can_fill_reply:
                         reply_summary = suffix
-                    if can_fill_reason:
+                        filled_from_marker = True
+                    if can_fill_reason and reason != prefix:
                         reason = prefix
+                        filled_from_marker = True
                 elif prefix in failure_result_prefixes:
                     if suffix and can_fill_reason:
                         reason = suffix
-                    elif can_fill_reason:
+                        filled_from_marker = True
+                    elif can_fill_reason and reason != prefix:
                         reason = prefix
+                        filled_from_marker = True
                 elif "回复：" in marker:
                     if suffix and can_fill_reply:
                         reply_summary = suffix
-                    if can_fill_reason:
+                        filled_from_marker = True
+                    if can_fill_reason and reason != prefix:
                         reason = prefix
+                        filled_from_marker = True
                 else:
                     if suffix and can_fill_reason:
                         reason = suffix
-                    elif can_fill_reason:
+                        filled_from_marker = True
+                    elif can_fill_reason and reason != prefix:
                         reason = prefix
-                # Always strip the result line from title once it is detected.
-                # Older saved records may already have reason/reply_summary split
-                # into their own fields; the previous guard skipped cleanup in that
-                # case, leaving “回帖成功。回复内容” visible in the 标题列.
-                title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip()
-                matched = True
-                break
+                        filled_from_marker = True
+                if filled_from_marker:
+                    title = title[:marker_index].strip().rstrip("-/｜|，,；;").strip()
+                    matched = True
+                    break
             if matched:
                 break
             if title == prefix and reason in generic_reason_values and not reply_summary:
@@ -3614,7 +3638,7 @@ class SehuatangSignin(_PluginBase):
             # Keep <td> as a real table-cell. Applying display:-webkit-box to the
             # td itself breaks table layout in the MoviePilot/Vuetify renderer and
             # can make the next cell (回帖结果) appear visually inside the 标题列.
-            td_style = f"max-width:{max_width}px;"
+            td_style = f"max-width:{max_width}px;overflow:hidden;text-overflow:ellipsis;"
             inner_style = "overflow:hidden;text-overflow:ellipsis;"
             if nowrap:
                 inner_style += "white-space:nowrap;"
@@ -3623,6 +3647,7 @@ class SehuatangSignin(_PluginBase):
             return {
                 'component': 'td',
                 'props': {'style': td_style, 'title': raw_text},
+                'text': raw_text,
                 'content': [{
                     'component': 'div',
                     'props': {'class': 'text-truncate', 'style': inner_style},
