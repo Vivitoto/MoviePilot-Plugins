@@ -223,6 +223,10 @@ def _nodes_by_component(value, component: str) -> list:
     return [node for node in _walk_schema(value) if node.get("component") == component]
 
 
+def _cell_text(cell: dict) -> str:
+    return _schema_text(cell).strip()
+
+
 def _top_level_card_index(page: list, marker: str) -> int:
     for idx, node in enumerate(page):
         if isinstance(node, dict) and node.get("component") == "VCard" and marker in _schema_text(node):
@@ -454,9 +458,9 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.2.9"', source)
-        self.assertEqual(sehuatang["version"], "1.2.9")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.2.9"])
+        self.assertIn('plugin_version = "1.3.0"', source)
+        self.assertEqual(sehuatang["version"], "1.3.0")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.3.0"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -529,6 +533,23 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         td_props = [str(node.get("props") or {}) for node in _nodes_by_component(table, "td")]
         self.assertTrue(any("max-width" in props and "text-overflow:ellipsis" in props for props in td_props))
 
+    def test_auto_reply_detail_truncated_cells_do_not_render_text_twice(self):
+        plugin = _plugin_with_auto_reply_ui_data()
+
+        auto_reply_card = _top_level_card(plugin.get_page(), "自动回帖")
+        table = _nodes_by_component(auto_reply_card, "VTable")[0]
+        truncated_cells = [
+            node
+            for node in _nodes_by_component(table, "td")
+            if "max-width" in str(node.get("props") or {})
+        ]
+
+        self.assertTrue(truncated_cells)
+        for cell in truncated_cells:
+            self.assertNotIn("text", cell)
+            self.assertEqual(len(cell.get("content") or []), 1)
+            self.assertIn("text", (cell.get("content") or [{}])[0])
+
     def test_auto_reply_detail_distinguishes_specific_reply_results(self):
         plugin = _plugin_with_auto_reply_ui_data()
 
@@ -556,39 +577,39 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         )
         cells = _nodes_by_component(beta_row, "td")
 
-        self.assertEqual(cells[4].get("text"), "-")
-        self.assertEqual(cells[5].get("text"), "回帖成功。谢谢楼主")
+        self.assertEqual(_cell_text(cells[4]), "-")
+        self.assertEqual(_cell_text(cells[5]), "回帖成功。谢谢楼主")
 
         epsilon_row = next(
             row for row in _nodes_by_component(table, "tr")
             if "epsilon" in _schema_text(row)
         )
         epsilon_cells = _nodes_by_component(epsilon_row, "td")
-        self.assertEqual(epsilon_cells[4].get("text"), "[ED2K｜原档合集] 天音るな DM...")
-        self.assertEqual(epsilon_cells[5].get("text"), "回帖成功。这反差设定挺有意思")
+        self.assertEqual(_cell_text(epsilon_cells[4]), "[ED2K｜原档合集] 天音るな DM...")
+        self.assertEqual(_cell_text(epsilon_cells[5]), "回帖成功。这反差设定挺有意思")
 
         def row_cells_for_account(account: str):
             for row in _nodes_by_component(table, "tr"):
                 row_cells = _nodes_by_component(row, "td")
-                if row_cells and row_cells[0].get("text") == account:
+                if row_cells and _cell_text(row_cells[0]) == account:
                     return row_cells
             raise AssertionError(f"missing row for account {account}")
 
         zeta_cells = row_cells_for_account("zeta")
-        self.assertEqual(zeta_cells[4].get("text"), "[ED2K｜原档合集] 整理｜本田...")
-        self.assertEqual(zeta_cells[5].get("text"), "回帖成功。整理得挺全，预览也直观")
+        self.assertEqual(_cell_text(zeta_cells[4]), "[ED2K｜原档合集] 整理｜本田...")
+        self.assertEqual(_cell_text(zeta_cells[5]), "回帖成功。整理得挺全，预览也直观")
 
         screenshot_cells = row_cells_for_account("screenshot")
-        self.assertEqual(screenshot_cells[4].get("text"), "[ED2K｜整理] 我心目中的女神（...")
-        self.assertEqual(screenshot_cells[5].get("text"), "回帖成功。整理得挺全，预览图也挺直观")
+        self.assertEqual(_cell_text(screenshot_cells[4]), "[ED2K｜整理] 我心目中的女神（...")
+        self.assertEqual(_cell_text(screenshot_cells[5]), "回帖成功。整理得挺全，预览图也挺直观")
 
         eta_cells = row_cells_for_account("eta")
-        self.assertEqual(eta_cells[4].get("text"), "失败标题")
-        self.assertEqual(eta_cells[5].get("text"), "回帖失败。页面返回验证码")
+        self.assertEqual(_cell_text(eta_cells[4]), "失败标题")
+        self.assertEqual(_cell_text(eta_cells[5]), "回帖失败。页面返回验证码")
 
         theta_cells = row_cells_for_account("theta")
-        self.assertEqual(theta_cells[4].get("text"), "失败标题2")
-        self.assertEqual(theta_cells[5].get("text"), "回帖失败。页面返回验证码2")
+        self.assertEqual(_cell_text(theta_cells[4]), "失败标题2")
+        self.assertEqual(_cell_text(theta_cells[5]), "回帖失败。页面返回验证码2")
 
     def test_auto_reply_detail_repairs_legacy_labeled_title_rows_for_display(self):
         plugin = _plugin_with_auto_reply_ui_data()
@@ -599,7 +620,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         def row_cells_for_account(account: str):
             for row in _nodes_by_component(table, "tr"):
                 row_cells = _nodes_by_component(row, "td")
-                if row_cells and row_cells[0].get("text") == account:
+                if row_cells and _cell_text(row_cells[0]) == account:
                     return row_cells
             raise AssertionError(f"missing row for account {account}")
 
@@ -612,8 +633,8 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         for account, (expected_title, expected_result) in expectations.items():
             cells = row_cells_for_account(account)
             row_text = _schema_text(cells)
-            self.assertEqual(cells[4].get("text"), expected_title)
-            self.assertEqual(cells[5].get("text"), expected_result)
+            self.assertEqual(_cell_text(cells[4]), expected_title)
+            self.assertEqual(_cell_text(cells[5]), expected_result)
             for polluted_label in ["回帖结果", "结果：", "原因：", "回复：", "<br"]:
                 self.assertNotIn(polluted_label, row_text)
 
@@ -796,14 +817,14 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         def row_cells_for_account(account: str):
             for row in _nodes_by_component(table, "tr"):
                 row_cells = _nodes_by_component(row, "td")
-                if row_cells and row_cells[0].get("text") == account:
+                if row_cells and _cell_text(row_cells[0]) == account:
                     return row_cells
             raise AssertionError(f"missing row for account {account}")
 
         for account, _, expected in cases:
             cells = row_cells_for_account(account)
-            self.assertEqual(cells[4].get("text"), expected["title"])
-            self.assertEqual(cells[5].get("text"), expected["display_result"])
+            self.assertEqual(_cell_text(cells[4]), expected["title"])
+            self.assertEqual(_cell_text(cells[5]), expected["display_result"])
 
     def test_auto_reply_notification_uses_normalized_fields(self):
         plugin_module = _load_plugin_module_with_stubs()
