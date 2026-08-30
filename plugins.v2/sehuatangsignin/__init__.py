@@ -65,7 +65,7 @@ class SehuatangSignin(_PluginBase):
     plugin_name = "98签到自用"
     plugin_desc = "98签到自用辅助：推送验证码链接，手动验证后继续提交签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/shtsignin.png"
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "sehuatang_signin_"
@@ -121,6 +121,7 @@ class SehuatangSignin(_PluginBase):
     _auto_reply_window_start = "09:00"
     _auto_reply_window_end = "12:00"
     _auto_reply_forum_ids = "141,166"
+    _auto_reply_max_pages_per_forum = 3
     _auto_reply_templates = ""
     _auto_reply_custom_prompt = ""
     _auto_reply_notify_template = "账号：{account}\n结果：{result}\n原因：{reason}\n标题：{title}\n回复：{reply}"
@@ -180,6 +181,9 @@ class SehuatangSignin(_PluginBase):
                 self._auto_reply_window_start = str(config.get("auto_reply_window_start") or "09:00").strip()
                 self._auto_reply_window_end = str(config.get("auto_reply_window_end") or "12:00").strip()
                 self._auto_reply_forum_ids = str(auto_reply_forum_ids if auto_reply_forum_ids is not None else "").strip()
+                self._auto_reply_max_pages_per_forum = self._clamp_auto_reply_max_pages_per_forum(
+                    config.get("auto_reply_max_pages_per_forum", 3)
+                )
                 self._auto_reply_templates = str(auto_reply_templates if auto_reply_templates is not None else "").strip()
                 self._auto_reply_custom_prompt = str(config.get("auto_reply_custom_prompt") or "").strip()
                 self._auto_reply_notify_template = str(
@@ -309,6 +313,9 @@ class SehuatangSignin(_PluginBase):
             if cookie:
                 account_lines.append(f"{name or f'账号{idx + 1}'} | {cookie}")
 
+        self._auto_reply_max_pages_per_forum = self._clamp_auto_reply_max_pages_per_forum(
+            self._auto_reply_max_pages_per_forum
+        )
         config = {
             "enabled": self._enabled, "notify": self._notify, "refresh_profile": self._refresh_profile, "onlyonce": self._onlyonce,
             "cron": "", "timeout": self._timeout,
@@ -322,6 +329,7 @@ class SehuatangSignin(_PluginBase):
             "auto_reply_window_start": self._auto_reply_window_start,
             "auto_reply_window_end": self._auto_reply_window_end,
             "auto_reply_forum_ids": self._auto_reply_forum_ids,
+            "auto_reply_max_pages_per_forum": self._auto_reply_max_pages_per_forum,
             "auto_reply_templates": self._auto_reply_templates,
             "auto_reply_custom_prompt": self._auto_reply_custom_prompt,
             "auto_reply_notify_template": self._auto_reply_notify_template,
@@ -361,6 +369,14 @@ class SehuatangSignin(_PluginBase):
         if text in {"0", "false", "no", "n", "off", "disabled", "disable", "关闭", "否", ""}:
             return False
         return default
+
+    @staticmethod
+    def _clamp_auto_reply_max_pages_per_forum(value: Any) -> int:
+        try:
+            raw_value = 3 if value in (None, "") else value
+            return max(1, min(10, int(raw_value)))
+        except (TypeError, ValueError):
+            return 3
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -779,6 +795,7 @@ class SehuatangSignin(_PluginBase):
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_start', 'label': '窗口开始', 'placeholder': '09:00'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_window_end', 'label': '窗口结束', 'placeholder': '12:00'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_forum_ids', 'label': '版块 ID', 'placeholder': '141,166'}}]},
+                                        {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_pages_per_forum', 'label': '每轮最大扫描页数', 'type': 'number', 'placeholder': '3'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_attempts_per_day', 'label': '每日最大回帖尝试次数', 'type': 'number', 'placeholder': '1'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_max_thread_age_days', 'label': '主题最大天数', 'type': 'number', 'placeholder': '7'}}]},
                                         {'component': 'VCol', 'props': {'cols': 12, 'md': 3, 'class': 'py-3'}, 'content': [{'component': 'VTextField', 'props': {'model': 'auto_reply_min_interval_minutes', 'label': '账号最小回帖间隔(分钟)', 'type': 'number', 'placeholder': '10'}}]},
@@ -811,6 +828,7 @@ class SehuatangSignin(_PluginBase):
             "auto_reply_window_start": "09:00",
             "auto_reply_window_end": "12:00",
             "auto_reply_forum_ids": "141,166",
+            "auto_reply_max_pages_per_forum": 3,
             "auto_reply_templates": "感谢分享，辛苦了。\n内容不错，支持一下。\n感谢楼主分享。",
             "auto_reply_custom_prompt": "",
             "auto_reply_title_blacklist": "",
@@ -1101,6 +1119,71 @@ class SehuatangSignin(_PluginBase):
         digest = hashlib.md5(raw_account.encode("utf-8")).hexdigest()[:10]
         return f"{self.plugin_config_prefix}auto_reply_{plan_date}_{safe_account}_{digest}_{int(attempt_index or 1)}"
 
+    def _next_auto_reply_scan_time(self, now: datetime, end_at: datetime) -> Optional[datetime]:
+        if not end_at or now >= end_at:
+            return None
+        try:
+            min_interval_seconds = int(self._auto_reply_min_interval_minutes or 0) * 60
+        except (TypeError, ValueError):
+            min_interval_seconds = 0
+        retry_at = now + timedelta(seconds=max(60, min_interval_seconds))
+        return retry_at if retry_at < end_at else end_at
+
+    def _reschedule_auto_reply_plan_job(self, account_index: int, account_id: str, plan_date: str,
+                                        attempt_index: int, run_at: datetime, message: str = "") -> bool:
+        if not self._scheduler or not run_at:
+            return False
+        plan = self.get_data(self._auto_reply_plan_key) or {}
+        if not isinstance(plan, dict) or plan.get("date") != plan_date:
+            return False
+        changed = False
+        for job in plan.get("jobs") or []:
+            if not isinstance(job, dict) or job.get("account") != account_id:
+                continue
+            if int(job.get("attempt_index") or 1) != int(attempt_index):
+                continue
+            job["run_at"] = run_at.strftime("%Y-%m-%d %H:%M:%S")
+            job["status"] = "scheduled"
+            job["message"] = str(message or "")[:160]
+            job.pop("executed_at", None)
+            changed = True
+            break
+        if not changed:
+            return False
+        self.save_data(self._auto_reply_plan_key, plan)
+        try:
+            self._scheduler.add_job(
+                func=self._run_auto_reply_for_account,
+                trigger="date",
+                run_date=run_at,
+                args=[account_index, account_id, plan_date, attempt_index],
+                id=self._auto_reply_job_id(plan_date, account_id, attempt_index),
+                replace_existing=True,
+            )
+        except Exception as e:
+            logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖重排计划失败：{e}")
+            return False
+        return True
+
+    def _has_later_auto_reply_attempt(self, account_id: str, plan_date: str, attempt_index: int,
+                                      now: datetime, end_at: Optional[datetime]) -> bool:
+        if not end_at or now >= end_at:
+            return False
+        plan = self.get_data(self._auto_reply_plan_key) or {}
+        if not isinstance(plan, dict) or plan.get("date") != plan_date:
+            return False
+        for job in plan.get("jobs") or []:
+            if not isinstance(job, dict) or job.get("account") != account_id:
+                continue
+            if int(job.get("attempt_index") or 1) <= int(attempt_index):
+                continue
+            if job.get("status") not in ("scheduled", "pending", ""):
+                continue
+            run_at = self._parse_auto_reply_datetime(job.get("run_at"))
+            if run_at and now < run_at <= end_at:
+                return True
+        return False
+
     def _run_auto_reply_for_account(self, account_index: int, account_id: str, plan_date: str, attempt_index: int = 1):
         if not self._enabled:
             logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖跳过：插件未启用")
@@ -1123,6 +1206,14 @@ class SehuatangSignin(_PluginBase):
             return
 
         forum_ids = self._parse_forum_ids(self._auto_reply_forum_ids)
+        now = self._auto_reply_now()
+        window = self._parse_auto_reply_window(
+            self._auto_reply_window_start,
+            self._auto_reply_window_end,
+            now=now,
+        )
+        window_end = window[1] if window else None
+        scan_executed = False
         if not forum_ids:
             result = self._auto_reply_result("skipped", "无有效版块 ID")
         else:
@@ -1132,23 +1223,56 @@ class SehuatangSignin(_PluginBase):
                 self._update_auto_reply_plan_status(account_id, plan_date, "skipped", reason, attempt_index=attempt_index)
                 return
             try:
+                scan_executed = True
                 result = self._auto_reply_single(account, account_id, forum_ids)
             finally:
                 self._release_auto_reply_run(account_id, today)
         result = self._normalize_auto_reply_result(result)
         result["attempt_index"] = attempt_index
         result_status = self._auto_reply_result_status(result)
+        finished_at = self._auto_reply_now()
+        if scan_executed and result_status == "skipped":
+            next_run = self._next_auto_reply_scan_time(finished_at, window_end) if window_end else None
+            if next_run and self._reschedule_auto_reply_plan_job(
+                    account_index,
+                    account_id,
+                    plan_date,
+                    attempt_index,
+                    next_run,
+                    result.get("reason") or result.get("message") or "未找到合适候选帖，稍后重试",
+            ):
+                logger.info(
+                    f"[SehuatangSignin] [{account_id}] 自动回帖未找到合适候选，"
+                    f"不消耗失败尝试，重排到 {next_run.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                return
         self._record_auto_reply_result(account_id, result)
+        plan_status = "done" if result_status == "success" else result_status
         self._update_auto_reply_plan_status(
             account_id,
             plan_date,
-            "done" if result_status == "success" else result_status,
+            plan_status,
             result.get("reason") or result.get("message", ""),
             attempt_index=attempt_index,
         )
         if result_status == "success":
             self._skip_remaining_auto_reply_plan_jobs(account_id, plan_date, attempt_index)
-        self._notify_auto_reply_result(account_id, result)
+        elif result_status == "skipped":
+            remaining_message = "自动回帖窗口结束，未找到合适候选帖" if scan_executed else (
+                result.get("reason") or result.get("message") or "自动回帖跳过"
+            )
+            self._skip_remaining_auto_reply_plan_jobs(
+                account_id,
+                plan_date,
+                attempt_index,
+                message=remaining_message,
+            )
+        should_notify = not (
+            result_status == "failed"
+            and self._has_later_auto_reply_attempt(account_id, plan_date, attempt_index, finished_at, window_end)
+        )
+        if should_notify:
+            self._notify_auto_reply_result(account_id, result)
 
     def _claim_auto_reply_run(self, account_id: str, day: str) -> Tuple[bool, str]:
         key = f"{day}:{account_id}"
@@ -1209,40 +1333,44 @@ class SehuatangSignin(_PluginBase):
             seen_tids = set()
             skipped_candidates = 0
             blocked_forum_fids = []
+            max_pages_per_forum = self._clamp_auto_reply_max_pages_per_forum(self._auto_reply_max_pages_per_forum)
             for fid in forum_ids:
-                forum_url = f"{self._base_url}/forum.php?mod=forumdisplay&fid={fid}"
-                html = self._auto_reply_browser_primary_get(
-                    fs_sid,
-                    forum_url,
-                    cookies,
-                    request_state,
-                    account_id,
-                    f"版块 {fid}",
-                    browser_session_key=browser_session_key,
-                )
-                if self._is_auto_reply_blocked_page(html):
-                    logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖版块 {fid} 被安全页/权限页拦截")
-                    if str(fid) not in blocked_forum_fids:
-                        blocked_forum_fids.append(str(fid))
-                    continue
-                for candidate in self._extract_thread_candidates(html, fid, self._base_url):
-                    tid = str(candidate.get("tid") or "")
-                    if not tid or tid in seen_tids:
-                        continue
-                    seen_tids.add(tid)
-                    cached_skip = self._get_auto_reply_skipped_thread(tid)
-                    if cached_skip:
-                        skipped_candidates += 1
-                        reason = cached_skip.get("reason") or "已在跳过缓存中"
-                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：命中跳过缓存：{reason}")
-                        continue
-                    ok, reason = self._hard_filter_auto_reply_candidate(candidate, forum_ids, account_id=account_id)
-                    if ok:
-                        all_candidates.append(candidate)
-                    else:
-                        skipped_candidates += 1
-                        self._maybe_mark_auto_reply_skipped_thread(candidate, reason, "hard")
-                        logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：{reason}")
+                for page_num in range(1, max_pages_per_forum + 1):
+                    forum_url = f"{self._base_url}/forum.php?mod=forumdisplay&fid={fid}"
+                    if page_num > 1:
+                        forum_url = f"{forum_url}&page={page_num}"
+                    html = self._auto_reply_browser_primary_get(
+                        fs_sid,
+                        forum_url,
+                        cookies,
+                        request_state,
+                        account_id,
+                        f"版块 {fid} 第 {page_num} 页",
+                        browser_session_key=browser_session_key,
+                    )
+                    if self._is_auto_reply_blocked_page(html):
+                        logger.warning(f"[SehuatangSignin] [{account_id}] 自动回帖版块 {fid} 第 {page_num} 页被安全页/权限页拦截")
+                        if str(fid) not in blocked_forum_fids:
+                            blocked_forum_fids.append(str(fid))
+                        break
+                    for candidate in self._extract_thread_candidates(html, fid, self._base_url):
+                        tid = str(candidate.get("tid") or "")
+                        if not tid or tid in seen_tids:
+                            continue
+                        seen_tids.add(tid)
+                        cached_skip = self._get_auto_reply_skipped_thread(tid)
+                        if cached_skip:
+                            skipped_candidates += 1
+                            reason = cached_skip.get("reason") or "已在跳过缓存中"
+                            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：命中跳过缓存：{reason}")
+                            continue
+                        ok, reason = self._hard_filter_auto_reply_candidate(candidate, forum_ids, account_id=account_id)
+                        if ok:
+                            all_candidates.append(candidate)
+                        else:
+                            skipped_candidates += 1
+                            self._maybe_mark_auto_reply_skipped_thread(candidate, reason, "hard")
+                            logger.info(f"[SehuatangSignin] [{account_id}] 自动回帖候选 {tid} 跳过：{reason}")
 
             if not all_candidates:
                 message = "无可用候选帖"
@@ -3484,7 +3612,8 @@ class SehuatangSignin(_PluginBase):
         if changed:
             self.save_data(self._auto_reply_plan_key, plan)
 
-    def _skip_remaining_auto_reply_plan_jobs(self, account_id: str, plan_date: str, completed_attempt_index: int):
+    def _skip_remaining_auto_reply_plan_jobs(self, account_id: str, plan_date: str, completed_attempt_index: int,
+                                             message: str = "今日已成功回帖，后续尝试跳过"):
         plan = self.get_data(self._auto_reply_plan_key) or {}
         if not isinstance(plan, dict) or plan.get("date") != plan_date:
             return
@@ -3497,7 +3626,7 @@ class SehuatangSignin(_PluginBase):
                 continue
             if job.get("status") in ("scheduled", "pending", ""):
                 job["status"] = "skipped"
-                job["message"] = "今日已成功回帖，后续尝试跳过"
+                job["message"] = message
                 if self._scheduler:
                     job_id = self._auto_reply_job_id(plan_date, account_id, attempt_index)
                     try:

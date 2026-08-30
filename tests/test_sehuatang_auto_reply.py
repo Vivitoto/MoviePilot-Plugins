@@ -5,10 +5,12 @@ import sys
 import threading
 import types
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs
 from unittest.mock import patch
+
+import pytz
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +95,9 @@ def _load_plugin_module_with_stubs() -> types.ModuleType:
 
         def post_message(self, **kwargs):
             self.messages.append(kwargs)
+
+        def update_config(self, config):
+            self.last_config = config
 
         def get_data_path(self):
             return ROOT
@@ -452,15 +457,72 @@ def _plugin_with_auto_reply_ui_data():
     return plugin
 
 
+class _RecordingScheduler:
+    def __init__(self):
+        self.added = []
+        self.removed = []
+        self.running = False
+
+    def add_job(self, *args, **kwargs):
+        self.added.append({"args": args, "kwargs": kwargs})
+
+    def remove_job(self, job_id):
+        self.removed.append(job_id)
+
+
+def _plugin_for_auto_reply_run(now, max_attempts=1):
+    plugin_module = _load_plugin_module_with_stubs()
+    plugin = plugin_module.SehuatangSignin()
+    plugin._enabled = True
+    plugin._notify = True
+    plugin._auto_reply_enabled = True
+    plugin._auto_reply_window_start = "09:00"
+    plugin._auto_reply_window_end = "10:00"
+    plugin._auto_reply_forum_ids = "141"
+    plugin._auto_reply_min_interval_minutes = 5
+    plugin._auto_reply_max_attempts_per_day = max_attempts
+    plugin._account_names = ["alpha"] + [""] * (plugin._account_slots - 1)
+    plugin._account_cookies = ["a=b"] + [""] * (plugin._account_slots - 1)
+    plugin._accounts_text = ""
+    plugin._parse_accounts()
+    day = now.strftime("%Y-%m-%d")
+    jobs = []
+    for attempt_index in range(1, max_attempts + 1):
+        run_at = now + timedelta(minutes=40 if attempt_index > 1 else 0)
+        jobs.append({
+            "account": "alpha",
+            "account_index": 0,
+            "attempt_index": attempt_index,
+            "run_at": run_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "scheduled",
+            "message": "",
+        })
+    plugin.data_store[plugin._auto_reply_plan_key] = {
+        "date": day,
+        "created_at": f"{day} 08:50:00",
+        "enabled": True,
+        "forum_ids": ["141"],
+        "window_start": "09:00",
+        "window_end": "10:00",
+        "max_attempts_per_day": max_attempts,
+        "min_interval_minutes": 5,
+        "account_ids": ["alpha"],
+        "jobs": jobs,
+        "message": "",
+    }
+    plugin._scheduler = _RecordingScheduler()
+    return plugin_module, plugin
+
+
 class SehuatangAutoReplyTest(unittest.TestCase):
     def test_auto_reply_plugin_version_is_current(self):
         source = _source()
         package = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
         sehuatang = package["SehuatangSignin"]
 
-        self.assertIn('plugin_version = "1.3.0"', source)
-        self.assertEqual(sehuatang["version"], "1.3.0")
-        self.assertEqual(list(sehuatang["history"])[:1], ["v1.3.0"])
+        self.assertIn('plugin_version = "1.3.1"', source)
+        self.assertEqual(sehuatang["version"], "1.3.1")
+        self.assertEqual(list(sehuatang["history"])[:1], ["v1.3.1"])
         self.assertLessEqual(len(sehuatang["history"]), 6)
 
     def test_auto_reply_defaults_and_data_keys_exist(self):
@@ -472,6 +534,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             '_auto_reply_window_start = "09:00"',
             '_auto_reply_window_end = "12:00"',
             '_auto_reply_forum_ids = "141,166"',
+            '_auto_reply_max_pages_per_forum = 3',
             '_auto_reply_max_candidates = 0',
             '_auto_reply_max_attempts_per_day = 1',
             '_auto_reply_max_thread_age_days = 7',
@@ -483,6 +546,7 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             '_auto_reply_success_key = "auto_reply_success_by_day"',
             '"auto_reply_forum_ids": "141,166"',
             '"auto_reply_onlyonce": False',
+            '"auto_reply_max_pages_per_forum": 3',
             '"auto_reply_max_attempts_per_day": 1',
             '"auto_reply_max_thread_age_days": 7',
         ]:
@@ -874,6 +938,34 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn("自动回帖依赖大语言模型", form_text)
         self.assertIn("设定-系统-智能助手配置", form_text)
 
+    def test_auto_reply_max_pages_config_clamps_and_appears_in_form(self):
+        plugin_module = _load_plugin_module_with_stubs()
+
+        for raw_value, expected in [
+            (None, 3),
+            ("", 3),
+            (0, 1),
+            ("-2", 1),
+            ("5", 5),
+            ("99", 10),
+            ("bad", 3),
+        ]:
+            with self.subTest(raw_value=raw_value):
+                plugin = plugin_module.SehuatangSignin()
+                plugin.init_plugin({"auto_reply_max_pages_per_forum": raw_value})
+                self.assertEqual(plugin._auto_reply_max_pages_per_forum, expected)
+                plugin._update_config()
+                self.assertEqual(plugin.last_config["auto_reply_max_pages_per_forum"], expected)
+
+        form, defaults = plugin_module.SehuatangSignin().get_form()
+        self.assertEqual(defaults["auto_reply_max_pages_per_forum"], 3)
+        max_page_fields = [
+            node for node in _nodes_by_component(form, "VTextField")
+            if (node.get("props") or {}).get("model") == "auto_reply_max_pages_per_forum"
+        ]
+        self.assertEqual(len(max_page_fields), 1)
+        self.assertEqual((max_page_fields[0].get("props") or {}).get("label"), "每轮最大扫描页数")
+
     def test_expected_pure_helpers_are_present(self):
         source = _source()
         klass = _class_node(source)
@@ -1075,11 +1167,78 @@ class SehuatangAutoReplyTest(unittest.TestCase):
             browser_calls,
             [
                 f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141",
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141&page=2",
+                f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141&page=3",
                 f"{plugin._base_url}/forum.php?mod=viewthread&tid=888",
             ],
         )
         self.assertEqual(fs_get_calls, [f"{plugin._base_url}/plugin.php?id=dd_sign"])
         self.assertEqual(submit_saw_browser_cookie, [True])
+
+    def test_auto_reply_scans_second_page_when_first_page_candidates_are_unsafe(self):
+        plugin_module = _load_plugin_module_with_stubs()
+        plugin = plugin_module.SehuatangSignin()
+        plugin._auto_reply_max_pages_per_forum = 2
+        plugin._auto_reply_max_thread_age_days = 0
+        page_1_html = '<a href="forum.php?mod=viewthread&tid=111">版规公告</a>'
+        page_2_html = '<a href="forum.php?mod=viewthread&tid=222">普通分享帖</a>'
+        detail_html = "<html>detail for 222</html>"
+        browser_calls = []
+        detail_tids = []
+        submitted = []
+
+        def fake_browser_get(fs_sid, url, cookies):
+            browser_calls.append(url)
+            if "forumdisplay" in url and "page=2" in url:
+                return page_2_html
+            if "forumdisplay" in url:
+                return page_1_html
+            return detail_html
+
+        def fake_detail(html_text, candidate, allowed_forum_ids):
+            self.assertEqual(html_text, detail_html)
+            detail_tids.append(candidate.get("tid"))
+            detail = dict(candidate)
+            detail.update({
+                "content": "普通内容带一点预览说明",
+                "author": "user",
+                "thread_subject_found": True,
+                "content_found": True,
+                "formhash": "abcdef12",
+                "can_reply": True,
+                "blocked_page": False,
+                "post_authors": [],
+                "post_author_refs": [],
+                "account_identity": {},
+            })
+            return detail
+
+        def fake_submit(fs_sid, cookies, detail, reply, **kwargs):
+            submitted.append((detail.get("tid"), reply))
+            return plugin._auto_reply_result("success", "回帖成功")
+
+        with patch.object(plugin_module, "fs_create_session", return_value="fs-test"), \
+                patch.object(plugin_module, "fs_destroy_session"), \
+                patch.object(plugin_module, "fs_browser_get_text", side_effect=fake_browser_get), \
+                patch.object(plugin_module, "fs_get", return_value=""), \
+                patch.object(plugin_module.random, "uniform", return_value=8), \
+                patch.object(plugin_module.time, "sleep"), \
+                patch.object(plugin, "_extract_auto_reply_thread_detail", side_effect=fake_detail), \
+                patch.object(plugin, "_assess_auto_reply_with_ai", return_value={"risk_reasons": []}), \
+                patch.object(plugin, "_polish_auto_reply_with_ai", return_value="预览感觉还可以"), \
+                patch.object(plugin, "_submit_auto_reply", side_effect=fake_submit):
+            result = plugin._auto_reply_single({"cookie_str": "a=b"}, "account-a", ["141"])
+
+        page_2_url = f"{plugin._base_url}/forum.php?mod=forumdisplay&fid=141&page=2"
+        detail_2_url = f"{plugin._base_url}/forum.php?mod=viewthread&tid=222"
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["tid"], "222")
+        self.assertEqual(result["title"], "普通分享帖")
+        self.assertIn(page_2_url, browser_calls)
+        self.assertIn(detail_2_url, browser_calls)
+        self.assertNotIn(f"{plugin._base_url}/forum.php?mod=viewthread&tid=111", browser_calls)
+        self.assertEqual(detail_tids, ["222"])
+        self.assertEqual(submitted, [("222", "预览感觉还可以")])
 
     def test_blocked_forum_pages_fail_after_browser_primary_when_no_usable_candidates_remain(self):
         plugin_module = _load_plugin_module_with_stubs()
@@ -1294,6 +1453,84 @@ class SehuatangAutoReplyTest(unittest.TestCase):
         self.assertIn('job["status"] = "skipped"', skip_body)
         self.assertIn("self._scheduler.remove_job(job_id)", skip_body)
         self.assertIn("今日已成功回帖，后续尝试跳过", skip_body)
+
+    def test_no_suitable_auto_reply_scan_reschedules_same_attempt_without_record_or_notify(self):
+        now = pytz.timezone("UTC").localize(datetime(2026, 8, 25, 9, 10, 0))
+        plugin_module, plugin = _plugin_for_auto_reply_run(now)
+        expected_retry_at = now + timedelta(minutes=5)
+
+        with patch.object(plugin_module.SehuatangSignin, "_auto_reply_now", return_value=now), \
+                patch.object(
+                    plugin,
+                    "_auto_reply_single",
+                    return_value=plugin._auto_reply_result("skipped", "候选帖均不合适（已跳过 2 个）"),
+                ), \
+                patch.object(plugin, "_record_auto_reply_result") as record_mock, \
+                patch.object(plugin, "_notify_auto_reply_result") as notify_mock:
+            plugin._run_auto_reply_for_account(0, "alpha", "2026-08-25", attempt_index=1)
+
+        record_mock.assert_not_called()
+        notify_mock.assert_not_called()
+        plan_jobs = plugin.data_store[plugin._auto_reply_plan_key]["jobs"]
+        self.assertEqual(plan_jobs[0]["attempt_index"], 1)
+        self.assertEqual(plan_jobs[0]["status"], "scheduled")
+        self.assertEqual(plan_jobs[0]["run_at"], expected_retry_at.strftime("%Y-%m-%d %H:%M:%S"))
+        self.assertEqual(len(plugin._scheduler.added), 1)
+        scheduled = plugin._scheduler.added[0]["kwargs"]
+        self.assertEqual(scheduled["run_date"], expected_retry_at)
+        self.assertEqual(scheduled["args"], [0, "alpha", "2026-08-25", 1])
+
+    def test_auto_reply_failure_consumes_attempt_and_waits_for_remaining_retry_without_notify(self):
+        tz = pytz.timezone("UTC")
+        now = tz.localize(datetime(2026, 8, 25, 9, 15, 0))
+        plugin_module, plugin = _plugin_for_auto_reply_run(now, max_attempts=2)
+
+        with patch.object(plugin_module.SehuatangSignin, "_auto_reply_now", return_value=now), \
+                patch.object(
+                    plugin,
+                    "_auto_reply_single",
+                    return_value=plugin._auto_reply_result("failed", "AI调用失败：评估调用超时"),
+                ), \
+                patch.object(plugin, "_notify_auto_reply_result") as notify_mock:
+            plugin._run_auto_reply_for_account(0, "alpha", "2026-08-25", attempt_index=1)
+
+        history = plugin.data_store[plugin._auto_reply_history_key]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["status"], "failed")
+        self.assertEqual(history[0]["attempt_index"], 1)
+        plan_jobs = plugin.data_store[plugin._auto_reply_plan_key]["jobs"]
+        self.assertEqual(plan_jobs[0]["status"], "failed")
+        self.assertEqual(plan_jobs[0]["attempt_index"], 1)
+        self.assertEqual(plan_jobs[1]["status"], "scheduled")
+        self.assertEqual(plan_jobs[1]["attempt_index"], 2)
+        self.assertEqual(plugin._scheduler.added, [])
+        notify_mock.assert_not_called()
+
+    def test_auto_reply_window_end_records_and_notifies_one_final_skipped_result(self):
+        tz = pytz.timezone("UTC")
+        now = tz.localize(datetime(2026, 8, 25, 10, 0, 0))
+        plugin_module, plugin = _plugin_for_auto_reply_run(now, max_attempts=2)
+        plugin.data_store[plugin._auto_reply_plan_key]["jobs"][1]["run_at"] = "2026-08-25 09:59:00"
+
+        with patch.object(plugin_module.SehuatangSignin, "_auto_reply_now", return_value=now), \
+                patch.object(
+                    plugin,
+                    "_auto_reply_single",
+                    return_value=plugin._auto_reply_result("skipped", "AI 评估未通过"),
+                ):
+            plugin._run_auto_reply_for_account(0, "alpha", "2026-08-25", attempt_index=1)
+
+        history = plugin.data_store[plugin._auto_reply_history_key]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["status"], "skipped")
+        self.assertEqual(history[0]["attempt_index"], 1)
+        self.assertEqual(len(plugin.messages), 1)
+        self.assertEqual(plugin.messages[0]["title"], "98自动回帖跳过")
+        plan_jobs = plugin.data_store[plugin._auto_reply_plan_key]["jobs"]
+        self.assertEqual(plan_jobs[0]["status"], "skipped")
+        self.assertEqual(plan_jobs[1]["status"], "skipped")
+        self.assertEqual(plan_jobs[1]["message"], "自动回帖窗口结束，未找到合适候选帖")
+        self.assertEqual(len(plugin._scheduler.removed), 1)
 
     def test_auto_reply_min_interval_applies_globally_across_accounts(self):
         plugin_module = _load_plugin_module_with_stubs()
