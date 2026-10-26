@@ -3,11 +3,12 @@
     "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v1.1.4": "修复验证码获取失败：站点在 10-24 前后把验证码接口的图片字段从 image 改成 img，插件侧改为两种字段都兼容，避免对方再改一次又挂。",
       "v1.1.3": "企微菜单优化：保留 /mox_signin 指令可手动执行，但不再占用企业微信“站点”菜单子项，避免超过企微每个菜单最多 5 个子菜单限制。",
       "v1.0.13": "修复失败重试调度参数错误：APScheduler 使用 replace_existing 替代误写的 replace，避免定时失败后安排重试时触发 DateTrigger 参数异常。",
       "v1.0.12": "修复重试配置细节：重试次数配置为 0 时不再被默认值覆盖；失败重试触发后不再叠加定时任务随机延时；重试仅限自动定时/重试链路且不跨天安排；重试成功后覆盖当日自动失败记录。",

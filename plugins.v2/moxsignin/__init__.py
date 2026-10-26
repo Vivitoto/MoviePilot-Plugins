@@ -24,7 +24,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.1.3"
+    plugin_version = "1.1.4"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -471,9 +471,12 @@ class MoxSignIn(_PluginBase):
             data = resp.json()
         except RequestException as e:
             raise RuntimeError(f"获取验证码失败：{e}") from e
-        if not data.get("key") or not data.get("image"):
+        # 站点在 2026-10-24 前后把验证码图片字段从 image 改成了 img。
+        # 两个都兼容，避免对方再改一次又挂。
+        img = data.get("img") or data.get("image")
+        if not data.get("key") or not img:
             raise RuntimeError("获取验证码失败：接口未返回有效验证码")
-        return {"captcha": data["image"], "captcha_key": data["key"]}
+        return {"captcha": img, "captcha_key": data["key"]}
 
     def _login(self, session: requests.Session):
         try:
