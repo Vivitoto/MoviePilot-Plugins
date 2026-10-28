@@ -19,12 +19,27 @@ from app.plugins import _PluginBase
 from app.schemas import NotificationType
 from app.schemas.types import EventType
 
+# 浏览侧动作（登录 / 过 Turnstile / 签到）
+# 相对导入在插件被 MP 以包形式加载时生效；直接运行该文件时退回绝对导入。
+try:
+    from .mox_browser import (
+        checkin_with_browser,
+        login_with_browser,
+        read_checkin_state,
+    )
+except ImportError:  # pragma: no cover
+    from mox_browser import (  # type: ignore
+        checkin_with_browser,
+        login_with_browser,
+        read_checkin_state,
+    )
+
 
 class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.1.4"
+    plugin_version = "1.3.0"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -466,42 +481,119 @@ class MoxSignIn(_PluginBase):
             return {}
 
     def _captcha(self, session: requests.Session) -> Dict[str, str]:
-        try:
-            resp = self._get_with_retry(session, f"{self._base_url}/api/forum/captcha/generate", "获取验证码")
-            data = resp.json()
-        except RequestException as e:
-            raise RuntimeError(f"获取验证码失败：{e}") from e
-        # 站点在 2026-10-24 前后把验证码图片字段从 image 改成了 img。
-        # 两个都兼容，避免对方再改一次又挂。
-        img = data.get("img") or data.get("image")
-        if not data.get("key") or not img:
-            raise RuntimeError("获取验证码失败：接口未返回有效验证码")
-        return {"captcha": img, "captcha_key": data["key"]}
+        """已废弃：站点把图片验证码换成了 Cloudflare Turnstile。
+
+        保留这个空壳是为了兼容可能存在的旧调用点，实际不再使用。
+        现在登录和签到的验证都由 mox_browser 阶段的 cloakbrowser 完成
+        （Turnstile token 无法用 requests 伪造）。
+
+        历史：2026-10-24 前后站点还把验证码图片字段从 image 改成 img，
+        当时靠双字段兼容撑着；再往后整个机制就换成 Turnstile 了。
+        """
+        raise RuntimeError(
+            "图片验证码方案已失效，站点改用 Cloudflare Turnstile；"
+            "请通过 mox_browser.login_with_browser / checkin_with_browser 完成验证"
+        )
 
     def _login(self, session: requests.Session):
+        """登录并拿到可用会话。
+
+        站点现在把登录接口挡在 Cloudflare Turnstile 后面，
+        纯 requests 无法拿到 token（旧的图片验证码方案已失效）。
+        这里用 cloakbrowser 完成登录，再把拿到的 cookie 灌回 requests.Session，
+        后续的用户信息刷新、资产统计等请求仍然走 requests，不必再开浏览器。
+
+        优先复用上次保存的 cookie：能用就省一次浏览器启动，
+        失效了再走完整登录并刷新缓存。
+        """
+        cached = self._load_cached_cookies()
+        if cached:
+            if self._apply_cookies(session, cached) and self._probe_session(session):
+                self._log_step("复用已保存的cookie，跳过登录")
+                return {"success": True, "reused": True}
+            self._log_step("已保存的cookie失效，重新登录")
+
+        result = login_with_browser(
+            base_url=self._base_url,
+            username=self._username,
+            password=self._password,
+            proxy=self._proxy_url,
+            remember=bool(self._remember),
+            timeout=self._timeout,
+            log=self._log_step,
+        )
+
+        if not result.ok:
+            raise RuntimeError(f"登录失败：{result.message}")
+
+        if not result.cookies:
+            raise RuntimeError("登录成功但没有拿到cookie")
+
+        self._apply_cookies(session, result.cookies)
+        self._save_cached_cookies(result.cookies)
+        self._log_step(f"登录成功，已缓存 {len(result.cookies)} 个cookie")
+
+        if not self._probe_session(session):
+            raise RuntimeError("登录后会话验证失败（签到页仍要求登录）")
+
+        return {"success": True, "reused": False}
+
+    # ---------- cookie 缓存 ----------
+
+    def _cached_cookie_key(self) -> str:
+        return "cached_cookies"
+
+    def _load_cached_cookies(self) -> Dict[str, str]:
+        """读取上次登录保存的 cookie。"""
         try:
-            resp = self._get_with_retry(session, f"{self._base_url}/login", "打开登录页")
-        except RequestException as e:
-            raise RuntimeError(f"打开登录页失败：{e}") from e
-        csrf = self._extract_csrf(resp.text)
-        session.headers.update({"x-csrf-token": csrf, "referer": f"{self._base_url}/login"})
-        payload = self._captcha(session)
-        payload.update({
-            "username": self._username,
-            "password": self._password,
-            "sec": None,
-            "secanswer": "",
-            "remember": bool(self._remember),
-        })
+            data = self.get_data(self._cached_cookie_key())
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        # 只保留字符串值，避免历史数据里混进奇怪结构
+        return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int, float))}
+
+    def _save_cached_cookies(self, cookies: Dict[str, str]) -> None:
         try:
-            login_resp = session.post(f"{self._base_url}/api/forum/login", json=payload, timeout=self._timeout)
-            login_resp.raise_for_status()
-            data = login_resp.json()
-        except RequestException as e:
-            raise RuntimeError(f"登录请求失败：{e}") from e
-        if not data.get("success"):
-            raise RuntimeError(f"登录失败：{data.get('message') or '账号密码错误或登录被拒绝'}")
-        return data
+            self.save_data(self._cached_cookie_key(), dict(cookies))
+        except Exception as exc:
+            self._log_step(f"保存cookie缓存失败（不影响本次执行）：{exc}")
+
+    def _apply_cookies(self, session: requests.Session, cookies: Dict[str, str]) -> bool:
+        if not cookies:
+            return False
+        domain = self._base_url.split("//", 1)[-1].split("/", 1)[0]
+        for name, value in cookies.items():
+            try:
+                session.cookies.set(name, value, domain=domain, path="/")
+            except Exception:
+                try:
+                    session.cookies.set(name, value)
+                except Exception:
+                    continue
+        return True
+
+    def _probe_session(self, session: requests.Session) -> bool:
+        """验证会话是否有效：能打开签到页且不被踢到登录页。"""
+        try:
+            resp = session.get(
+                f"{self._base_url}/forum/sign",
+                timeout=self._timeout,
+                allow_redirects=True,
+            )
+        except Exception:
+            return False
+        if resp.status_code != 200:
+            return False
+        final_url = str(getattr(resp, "url", "") or "")
+        if "/login" in final_url:
+            return False
+        # 页面里能读到 is_checked_in 字段才算真的进去了
+        page = self._extract_page_data(resp.text)
+        props = page.get("props", {}) if isinstance(page, dict) else {}
+        auth = props.get("auth", {}) if isinstance(props, dict) else {}
+        return bool(auth.get("user"))
 
     def _load_sign_page(self, session: requests.Session) -> Tuple[str, Dict[str, Any]]:
         try:
@@ -950,21 +1042,75 @@ class MoxSignIn(_PluginBase):
                     self.post_message(mtype=NotificationType.Plugin, title=f"【{self.plugin_name}】", text=self._notify_text(result))
                 self._handle_retry_after_result(result, "今日已签到")
                 return result
-            payload = self._captcha(session)
-            result['captcha_result'] = f"识别成功：{payload.get('captcha', '')}"
-            steps.append(f"🔢 验证码识别成功：{payload.get('captcha', '')}")
-            self._log_step(f"验证码识别成功：{payload.get('captcha', '')}")
+            # 签到接口同样要求 Turnstile token，走浏览器完成。
+            # 页面状态可能在这一刻之前刚变（比如别处签过了），
+            # 所以这里再用浏览器判一次，已签到就直接收工，不点按钮。
+            session_cookies = {
+                ck.name: ck.value for ck in session.cookies if ck.value is not None
+            }
+            checkin_res = checkin_with_browser(
+                base_url=self._base_url,
+                cookies=session_cookies,
+                proxy=self._proxy_url,
+                timeout=self._timeout,
+                log=self._log_step,
+            )
+            result['captcha_result'] = (
+                f"Turnstile token {checkin_res.token_len} 字符"
+                if checkin_res.token_len else "未使用"
+            )
+
+            if not checkin_res.ok:
+                steps.append(f"❌ 签到失败：{checkin_res.message}")
+                self._log_step(f"签到失败：{checkin_res.message}")
+                raise RuntimeError(checkin_res.message)
+
+            # 浏览器侧可能刷新了 cookie，同步回 session 供后续刷新用户信息
+            if checkin_res.cookies:
+                self._apply_cookies(session, checkin_res.cookies)
+                self._save_cached_cookies(checkin_res.cookies)
+
+            if checkin_res.status == "already":
+                steps.append('ℹ️ 检测到今天已经签到过')
+                self._log_step('检测到今天已经签到过')
+                result.update({
+                    'signin_status': '今日已签到',
+                    'signed_today': True,
+                    'result_label': '已签到',
+                    'message': checkin_res.message or '今天已经签到过了',
+                    'finished': True,
+                })
+                try:
+                    user_info = self._refresh_user_snapshot(session, props)
+                    if user_info:
+                        result['refresh_status'] = '成功'
+                        steps.append('👤 已刷新用户信息与资产数据')
+                except Exception as info_error:
+                    result['refresh_status'] = '失败'
+                    steps.append(f"⚠️ 用户信息刷新失败：{info_error}")
+                self._save_result(result)
+                if self._notify:
+                    self.post_message(mtype=NotificationType.Plugin,
+                                      title=f"【{self.plugin_name}】",
+                                      text=self._notify_text(result))
+                self._handle_retry_after_result(result, "今日已签到")
+                return result
+
+            steps.append('📝 已提交签到请求')
+            self._log_step('已提交签到请求')
+
+            # 解析签到响应里的奖励信息（结构沿用站点返回）
+            data: Dict[str, Any] = {}
             try:
-                resp = session.post(f"{self._base_url}/api/forum/check-in/sign", json=payload, timeout=self._timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                steps.append('📝 已提交签到请求')
-                self._log_step('已提交签到请求')
-            except RequestException as e:
-                steps.append(f"❌ 签到请求失败：{e}")
-                raise RuntimeError(f"签到请求失败：{e}") from e
+                data = json.loads(checkin_res.response) if checkin_res.response else {}
+            except Exception:
+                data = {}
             reward_index = (((data or {}).get('data') or {}).get('data'))
-            reward = self._reward_from_props(props, reward_index)
+            # 浏览器侧已经把页面 props.rewardsReal 取回来了，requests 拿不到 props 时用它兜底
+            reward_props = props if props.get('rewardsReal') else {
+                'rewardsReal': getattr(checkin_res, 'rewards', None) or []
+            }
+            reward = self._reward_from_props(reward_props, reward_index)
             reward_text = reward.get('text') or reward.get('name') if reward else None
             if reward_text:
                 steps.append(f"🎁 获得奖励：{reward_text}")
