@@ -319,8 +319,13 @@ def login_with_browser(
 ) -> BrowserResult:
     """用账号密码登录，返回可复用的 cookie。
 
-    成功时 result.cookies 里至少有 mox_session / XSRF-TOKEN / remember_web_*，
-    通常还带 cf_clearance（Cloudflare 真人通行证，能让后续请求少受挑战）。
+    登录接口要的是图片验证码，不是 Turnstile：
+        POST /api/forum/captcha/generate -> {key, img}
+        POST /api/forum/login            -> {captcha, captcha_key, username, password,
+                                             sec, secanswer, remember}
+
+    验证码必须自己取、自己提交。登录页加载时自己也会取一张，
+    如果交给页面去提交，它用的是它那张的 key，和我们识别的那张对不上，必然失败。
     """
     result = BrowserResult()
     if not username or not password:
@@ -335,126 +340,117 @@ def login_with_browser(
 
         log("打开登录页")
         try:
-            page.goto(f"{base_url}{LOGIN_PATH}", wait_until="domcontentloaded", timeout=timeout * 1000)
+            page.goto(f"{base_url}{LOGIN_PATH}", wait_until="domcontentloaded",
+                      timeout=timeout * 1000)
         except Exception as exc:
             result.status = "net"
             result.message = f"登录页打不开：{type(exc).__name__}: {str(exc)[:100]}"
             return result
 
-        time.sleep(5)
+        time.sleep(4)
         _enter_login_form(page, log)
         _dismiss_age_gate(page, log)
+        time.sleep(2)
 
-        # 确认表单就绪
-        form = page.evaluate("""() => {
-          const ins = [...document.querySelectorAll('input')].filter(i => i.offsetParent !== null);
-          return {
-            user: !!ins.find(i => i.type === 'text' || i.type === 'email'),
-            pass: !!ins.find(i => i.type === 'password'),
-          };
-        }""")
-        if not (form.get("user") and form.get("pass")):
-            result.status = "login"
-            result.message = "找不到登录表单（用户名/密码输入框）"
+        if not _ocr_available():
+            result.status = "token"
+            result.message = "未安装 ddddocr，无法自动识别登录验证码"
             return result
-        result.add("登录表单就绪")
+        result.add("本地 OCR 可用")
 
-        # 填账号密码
-        page.evaluate("""(creds) => {
-          const ins = [...document.querySelectorAll('input')].filter(i => i.offsetParent !== null);
-          const set = (el, v) => {
-            const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            s.call(el, v);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          };
-          const u = ins.find(i => i.type === 'text' || i.type === 'email');
-          const pw = ins.find(i => i.type === 'password');
-          if (u) set(u, creds[0]);
-          if (pw) set(pw, creds[1]);
-        }""", [username, password])
-        result.add("已填入账号密码")
-        log("已填入账号密码")
-        time.sleep(1)
+        last_code = -1
+        last_detail = ""
+        solved = False
 
-        # 登录页的 Turnstile 组件不会自己挂载，要先点一次登录按钮把它触发起来。
-        # 点下去后站点自己的逻辑也可能直接提交，两种情况都要能处理。
-        clicked = page.evaluate("""() => {
-          const btns = [...document.querySelectorAll('button,[role=button]')]
-            .filter(b => b.offsetParent !== null);
-          const t = btns.find(b => /登\\s*录|登\\s*入|立即登录/.test((b.innerText || '').trim()));
-          if (t) { t.click(); return (t.innerText || '').trim().slice(0, 12); }
-          return '';
-        }""")
-        if clicked:
-            result.add(f"已点击登录按钮触发验证：{clicked}")
-            log(f"点击登录按钮触发 Turnstile：{clicked}")
-        time.sleep(3)
+        for attempt in range(1, CAPTCHA_MAX_TRIES + 1):
+            cap = page.evaluate("""async (api) => {
+              try {
+                const r = await fetch(api, {credentials: 'include',
+                  headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}});
+                const j = await r.json();
+                return {status: r.status, key: j.key || '', img: j.img || j.image || ''};
+              } catch (e) { return {status: -1, key: '', img: '', err: String(e)}; }
+            }""", CAPTCHA_API)
 
-        # 取 Turnstile token
-        log("等待 turnstile")
-        if not _wait_turnstile(page):
-            # 组件没起来，但站点自己那次提交可能已经成功，跳一次签到页验证真伪
-            if _verify_logged_in(page, base_url, timeout):
-                result.ok = True
-                result.status = "ok"
-                result.message = "站点自身提交已登录成功（未走手动 token）"
-                result.cookies = _collect_cookies(context)
+            key = str(cap.get("key") or "")
+            img = str(cap.get("img") or "")
+            if not key or not img:
+                result.status = "token"
+                result.message = f"取登录验证码失败（HTTP {cap.get('status')}）"
                 return result
-            result.status = "token"
-            result.message = "turnstile 未就绪（登录页）"
-            return result
-        result.add("turnstile 就绪")
 
-        log("获取 turnstile token")
-        token = _grab_token(page)
-        if not token:
-            result.status = "token"
-            result.message = "登录时未拿到 Turnstile token"
-            return result
-        result.token_len = len(token)
-        result.add(f"token 长度 {len(token)}")
-        log(f"token 长度 {len(token)}")
+            try:
+                png = base64.b64decode(img.split(",", 1)[-1])
+            except Exception as exc:
+                result.status = "token"
+                result.message = f"验证码图片解码失败：{type(exc).__name__}"
+                return result
 
-        # 提交登录
-        log("提交登录")
-        res = page.evaluate("""async (args) => {
-          const [api, user, pw, token, remember] = args;
-          try {
-            const m = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-            const xsrf = m ? decodeURIComponent(m[1]) : '';
-            const r = await fetch(api, {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json', 'Accept': 'application/json',
-                        'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest'},
-              body: JSON.stringify({
-                username: user, password: pw, recaptcha: token,
-                sec: null, secanswer: '', remember: !!remember,
-              }),
-              credentials: 'include',
-            });
-            return {status: r.status, body: (await r.text()).slice(0, 800)};
-          } catch (e) { return {status: -1, body: 'fetch error: ' + e.message}; }
-        }""", [LOGIN_API, username, password, token, remember])
+            answer = _ocr_classify(png)
+            if not answer or not (4 <= len(answer) <= 6):
+                result.add(f"第 {attempt} 次识别异常：{answer!r}")
+                log(f"识别异常：{answer!r}")
+                time.sleep(1.0)
+                continue
 
-        code = int(res.get("status", -1))
-        body = str(res.get("body", ""))
-        result.http_status = code
-        result.response = body
-        result.add(f"登录 HTTP {code}")
-        log(f"登录 HTTP {code}")
+            result.add(f"第 {attempt} 次识别：{answer}")
+            log(f"登录验证码识别：{answer}")
 
-        if code != 200:
+            res = page.evaluate("""async (args) => {
+              const [api, key, ans, user, pw, remember] = args;
+              try {
+                const m = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
+                const xsrf = m ? decodeURIComponent(m[1]) : '';
+                const r = await fetch(api, {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json', 'Accept': 'application/json',
+                            'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest'},
+                  body: JSON.stringify({captcha: ans, captcha_key: key,
+                                        username: user, password: pw,
+                                        sec: null, secanswer: '', remember: !!remember}),
+                  credentials: 'include',
+                });
+                return {status: r.status, body: (await r.text()).slice(0, 600)};
+              } catch (e) { return {status: -1, body: 'fetch error: ' + e.message}; }
+            }""", [LOGIN_API, key, answer, username, password, remember])
+
+            last_code = int(res.get("status", -1))
+            body = str(res.get("body", ""))
+            result.http_status = last_code
+            result.response = body
+            result.add(f"登录 HTTP {last_code}")
+            log(f"登录 HTTP {last_code}")
+
+            try:
+                parsed = json.loads(body)
+                detail = f"{parsed.get('message') or ''} {parsed.get('errors') or ''}"
+            except Exception:
+                detail = body
+            last_detail = detail
+
+            if last_code == 200:
+                solved = True
+                break
+            if "验证码" not in detail:
+                break
+            time.sleep(1.5)
+
+        result.cookies = _collect_cookies(context)
+
+        if not solved:
             result.status = "login"
-            result.message = f"登录失败 HTTP {code}：{body[:120]}"
+            if last_detail and "验证码" in last_detail:
+                result.message = f"登录验证码连续 {CAPTCHA_MAX_TRIES} 次未通过"
+            else:
+                result.message = f"登录失败 HTTP {last_code}：{last_detail[:120]}"
             return result
 
-        if "success" in body and '"success":false' in body.replace(" ", ""):
+        # 登录接口返回成功不等于真的登录了，用签到页确认一次
+        if not _verify_logged_in(page, base_url, timeout):
             result.status = "login"
-            result.message = f"登录被拒绝：{body[:150]}"
+            result.message = "登录接口返回成功，但签到页仍被踢回登录页"
             return result
 
-        # 导出 cookie
         result.cookies = _collect_cookies(context)
         result.add(f"导出 {len(result.cookies)} 个 cookie：{', '.join(sorted(result.cookies))}")
         log(f"导出 {len(result.cookies)} 个 cookie")
@@ -474,7 +470,6 @@ def login_with_browser(
                 browser.close()
         except Exception:
             pass
-
 
 def _read_sign_button(page) -> dict:
     """读取签到按钮状态。clickable 只在真正能触发签到时为 True。
