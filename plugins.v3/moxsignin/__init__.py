@@ -39,7 +39,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -575,7 +575,13 @@ class MoxSignIn(_PluginBase):
         return True
 
     def _probe_session(self, session: requests.Session) -> bool:
-        """验证会话是否有效：能打开签到页且不被踢到登录页。"""
+        """验证会话是否有效：能打开签到页且不被踢到登录页。
+
+        **不能把 Cloudflare 的 403 当成会话失效。** 站点挡在 CF 后面，
+        requests 没有 cf_clearance 就会拿到挑战页；浏览器却完全能进。
+        这种情况判 False 会让刚登录成功的流程整个失败。
+        真正的登录态判断交给 checkin_with_browser（看是否被踢回 /login）。
+        """
         try:
             resp = session.get(
                 f"{self._base_url}/forum/sign",
@@ -584,16 +590,31 @@ class MoxSignIn(_PluginBase):
             )
         except Exception:
             return False
-        if resp.status_code != 200:
-            return False
+
         final_url = str(getattr(resp, "url", "") or "")
         if "/login" in final_url:
             return False
-        # 页面里能读到 is_checked_in 字段才算真的进去了
+
+        if resp.status_code != 200:
+            body = (resp.text or "")[:3000]
+            if (resp.status_code in (403, 429)
+                    or "Just a moment" in body
+                    or "Attention Required" in body):
+                self._log_step("会话探测被 Cloudflare 拦截，交由浏览器判定")
+                return True
+            return False
+
+        # 页面里能读到 auth.user 才算真的进去了
         page = self._extract_page_data(resp.text)
         props = page.get("props", {}) if isinstance(page, dict) else {}
         auth = props.get("auth", {}) if isinstance(props, dict) else {}
-        return bool(auth.get("user"))
+        if auth.get("user"):
+            return True
+        # props 解析不到（页面结构变了）也不要一口咬定失效
+        if not props:
+            self._log_step("会话探测页面无法解析，交由浏览器判定")
+            return True
+        return False
 
     def _load_sign_page(self, session: requests.Session) -> Tuple[str, Dict[str, Any]]:
         try:
@@ -865,7 +886,8 @@ class MoxSignIn(_PluginBase):
                 user_info['username'] = profile_name.group(1).strip()
         return user_info
 
-    def _fetch_profile_via_api(self, session: requests.Session, uid: str) -> Dict[str, Any]:
+    def _build_user_info(self, payload: Dict[str, Any], uid: str) -> Dict[str, Any]:
+        """把资料接口返回的 data 解析成统一结构。requests 和浏览器两条路共用。"""
         user_info = {
             'username': self._username,
             'user_id': uid,
@@ -875,12 +897,6 @@ class MoxSignIn(_PluginBase):
             'assets': {},
             'assets_raw': '',
         }
-        if not uid:
-            return user_info
-        resp = session.post(f"{self._base_url}/api/forum/user-profile-data", json={'uid': int(uid)}, timeout=self._timeout)
-        resp.raise_for_status()
-        data = resp.json() or {}
-        payload = (data.get('data') or {}) if isinstance(data, dict) else {}
         if not payload:
             return user_info
         user_info['username'] = payload.get('name') or self._username
@@ -906,11 +922,36 @@ class MoxSignIn(_PluginBase):
             user_info['member_status']['上次登录'] = str(payload.get('last_login'))
         return user_info
 
-    def _refresh_user_snapshot(self, session: requests.Session, props: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _fetch_profile_via_api(self, session: requests.Session, uid: str) -> Dict[str, Any]:
+        if not uid:
+            return self._build_user_info({}, uid)
+        resp = session.post(f"{self._base_url}/api/forum/user-profile-data", json={'uid': int(uid)}, timeout=self._timeout)
+        resp.raise_for_status()
+        data = resp.json() or {}
+        payload = (data.get('data') or {}) if isinstance(data, dict) else {}
+        return self._build_user_info(payload, uid)
+
+    def _refresh_user_snapshot(self, session: requests.Session, props: Dict[str, Any],
+                               profile_payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """刷新用户资料与资产。
+
+        profile_payload 是浏览器侧顺手取回的资料接口数据。站点挡在 CF 后面，
+        requests 没有 cf_clearance 时会拿到 403，这条兜底很关键。
+        """
         if not self._refresh_user_info:
             self._log_step('已跳过用户信息刷新（配置关闭）')
             return None
         uid = self._user_id or str(((props.get('auth') or {}).get('user') or {}).get('id') or '')
+
+        # 优先用浏览器带回来的数据，省一次可能被 CF 拦下的 requests
+        if profile_payload:
+            user_info = self._build_user_info(profile_payload, uid)
+            if user_info.get('assets') or user_info.get('member_status'):
+                self._log_step('已用浏览器返回的资料刷新用户信息与资产')
+                self.save_data(self._user_info_key, user_info)
+                self._save_asset_point(user_info)
+                return user_info
+
         if not uid and self._username:
             uid = self._search_user_id(session, self._username) or ''
         user_info = {}
@@ -1014,12 +1055,26 @@ class MoxSignIn(_PluginBase):
             result['login_status'] = '成功'
             steps.append('🔐 登录成功')
             self._log_step('登录成功')
-            _, props = self._load_sign_page(session)
-            steps.append('📄 已打开签到页')
-            self._log_step('已打开签到页')
-            timezone_note = self._ensure_timezone(session, props)
-            if timezone_note:
+            try:
                 _, props = self._load_sign_page(session)
+                steps.append('📄 已打开签到页')
+                self._log_step('已打开签到页')
+            except Exception as load_error:
+                # 刚用浏览器登录完时 cookie 里没有 cf_clearance，requests 会被 CF 拦。
+                # 这时不能直接失败——状态判断和签到都交给浏览器那一趟去做。
+                props = {}
+                steps.append(f"⚠️ 签到页无法直接请求（{load_error}），改由浏览器判断")
+                self._log_step(f"签到页请求失败，改由浏览器判断：{load_error}")
+            timezone_note = None
+            try:
+                timezone_note = self._ensure_timezone(session, props)
+            except Exception as tz_error:
+                self._log_step(f"时区设置跳过：{tz_error}")
+            if timezone_note:
+                try:
+                    _, props = self._load_sign_page(session)
+                except Exception:
+                    props = {}
                 result['message'] = timezone_note
                 steps.append(f"🌍 {timezone_note}")
                 self._log_step(timezone_note)
@@ -1054,11 +1109,10 @@ class MoxSignIn(_PluginBase):
                 proxy=self._proxy_url,
                 timeout=self._timeout,
                 log=self._log_step,
+                user_id=str(self._user_id or ""),
             )
-            result['captcha_result'] = (
-                f"Turnstile token {checkin_res.token_len} 字符"
-                if checkin_res.token_len else "未使用"
-            )
+            ocr_steps = [s for s in checkin_res.steps if "识别" in s]
+            result['captcha_result'] = ocr_steps[-1] if ocr_steps else "未使用"
 
             if not checkin_res.ok:
                 steps.append(f"❌ 签到失败：{checkin_res.message}")
@@ -1081,7 +1135,7 @@ class MoxSignIn(_PluginBase):
                     'finished': True,
                 })
                 try:
-                    user_info = self._refresh_user_snapshot(session, props)
+                    user_info = self._refresh_user_snapshot(session, props, getattr(checkin_res, 'profile', None))
                     if user_info:
                         result['refresh_status'] = '成功'
                         steps.append('👤 已刷新用户信息与资产数据')

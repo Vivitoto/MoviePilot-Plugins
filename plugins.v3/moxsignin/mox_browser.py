@@ -28,6 +28,7 @@ SIGN_PATH = "/forum/sign"
 LOGIN_API = "/api/forum/login"
 SIGN_API = "/api/forum/check-in/sign"
 CAPTCHA_API = "/api/forum/captcha/generate"
+PROFILE_API = "/api/forum/user-profile-data"
 
 WAIT_TURNSTILE = 45
 WAIT_TOKEN = 60
@@ -45,6 +46,7 @@ class BrowserResult:
     http_status: Optional[int] = None
     response: str = ""
     rewards: list = field(default_factory=list)   # 页面 props.rewardsReal，用于把奖励索引翻译成文本
+    profile: dict = field(default_factory=dict)   # 资料接口 data，requests 被 CF 拦时用它兜底
     steps: list[str] = field(default_factory=list)
 
     def add(self, msg: str) -> None:
@@ -504,6 +506,7 @@ def checkin_with_browser(
     proxy: str = "",
     timeout: int = 60,
     log: Callable[[str], None] = _noop_log,
+    user_id: str = "",
 ) -> BrowserResult:
     """用给定 cookie 完成签到。
 
@@ -563,6 +566,37 @@ def checkin_with_browser(
         result.rewards = rewards if isinstance(rewards, list) else []
         if result.rewards:
             result.add(f"奖励表 {len(result.rewards)} 项")
+
+        # 同时把用户资料一起取回。requests 没有 cf_clearance 会被 CF 拦，
+        # 浏览器这一趟顺手做掉，省一次会话也省一次失败。
+        try:
+            # uid 必须用插件配置的那个。页面 props 里的 auth.user.id 是
+            # discuz 侧的编号，和资料接口要的 Laravel 用户 id 不是一套，
+            # 拿错了会返回别人的资料。
+            uid = str(user_id or "").strip()
+            if uid:
+                prof = page.evaluate("""async (args) => {
+                  const [api, uid] = args;
+                  try {
+                    const m = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
+                    const xsrf = m ? decodeURIComponent(m[1]) : '';
+                    const r = await fetch(api, {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json', 'Accept': 'application/json',
+                                'X-XSRF-TOKEN': xsrf, 'X-Requested-With': 'XMLHttpRequest'},
+                      body: JSON.stringify({uid: parseInt(uid, 10)}),
+                      credentials: 'include',
+                    });
+                    if (!r.ok) return null;
+                    const j = await r.json();
+                    return (j && j.data) ? j.data : null;
+                  } catch (e) { return null; }
+                }""", [PROFILE_API, uid])
+                if isinstance(prof, dict) and prof:
+                    result.profile = prof
+                    result.add(f"已取回用户资料（{len(prof)} 个字段）")
+        except Exception:
+            pass
 
         if not state.get("found"):
             result.status = "token"

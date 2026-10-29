@@ -3,11 +3,12 @@
     "name": "Mox签到自用",
     "description": "自动登录魔性论坛签到。",
     "labels": "签到,自动化,消息通知",
-    "version": "1.3.1",
+    "version": "1.3.2",
     "icon": "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png",
     "author": "Vivitoto",
     "level": 1,
     "history": {
+      "v1.3.2": "修掉登录后整个流程失败的问题。浏览器登录拿到的 cookie 里没有 cf_clearance，requests 会被 Cloudflare 拦成 403，之前把这种 403 当成「会话失效」，刚登录成功就报错退出；现在遇到 CF 拦截不再判失效，签到页请求失败也降级交给浏览器判断。用户资料改由签到时那次浏览器会话顺手取回，不再依赖可能被拦的 requests。另外修掉资料 uid 取错来源的问题：页面里的 auth.user.id 是 discuz 侧的编号，和资料接口要的 Laravel 用户 id 不是一套，拿错了会查到别人的资料。",
       "v1.3.1": "修复登录：登录页用的是图片验证码而不是 Turnstile，之前一直等 Turnstile 导致登录必然失败。改为自己取验证码、本地 OCR 识别、自己提交登录接口，识别错误自动换一张重试。同时修掉「登录接口返回成功就当登录成功」的误判，改用签到页跳转确认；验证码必须由插件自己取，混用页面加载时那张会因为 key 对不上而失败。",
       "v1.3.0": "签到改用图片验证码 + 本地 OCR：站点把签到验证换成 5 位图形验证码，接入 ddddocr 在本地识别，不经过任何第三方打码服务。识别结果长度不对或服务端判定验证码错误时自动换图重试，最多 5 次。新增资源拦截（图片/字体/媒体）降低触发限流的概率；登录判定改为访问签到页看是否被踢回登录页，修掉游客 cookie 被误判为已登录的问题。",
       "v1.2.0": "签到与登录改由真实浏览器执行：站点的 Cloudflare Turnstile 与 cf_clearance 无法用 requests 伪造，改为 cloakbrowser 完成验证后再把 cookie 交给主逻辑。奖励解析改为从页面 data-page 读取奖励表，配合接口返回的奖励下标还原奖励名称。",
