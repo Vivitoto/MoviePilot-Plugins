@@ -39,7 +39,7 @@ class MoxSignIn(_PluginBase):
     plugin_name = "Mox签到自用"
     plugin_desc = "自动登录魔性论坛签到。"
     plugin_icon = "https://raw.githubusercontent.com/Vivitoto/MoviePilot-Plugins/main/icons/moxsignin.png"
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     plugin_author = "Vivitoto"
     author_url = "https://github.com/Vivitoto"
     plugin_config_prefix = "moxsignin_"
@@ -945,12 +945,20 @@ class MoxSignIn(_PluginBase):
 
         # 优先用浏览器带回来的数据，省一次可能被 CF 拦下的 requests
         if profile_payload:
-            user_info = self._build_user_info(profile_payload, uid)
-            if user_info.get('assets') or user_info.get('member_status'):
-                self._log_step('已用浏览器返回的资料刷新用户信息与资产')
-                self.save_data(self._user_info_key, user_info)
-                self._save_asset_point(user_info)
-                return user_info
+            prof_name = str(profile_payload.get('name') or '').strip()
+            if self._username and prof_name and prof_name != self._username:
+                # 资料接口拿错 uid 时不会报错，只会默默返回别人的数据。
+                # 这里挡一道，宁可不刷新也不能记错。
+                self._log_step(
+                    f"浏览器返回的资料属于 {prof_name}，与账号 {self._username} 不符，已丢弃"
+                )
+            else:
+                user_info = self._build_user_info(profile_payload, uid)
+                if user_info.get('assets') or user_info.get('member_status'):
+                    self._log_step('已用浏览器返回的资料刷新用户信息与资产')
+                    self.save_data(self._user_info_key, user_info)
+                    self._save_asset_point(user_info)
+                    return user_info
 
         if not uid and self._username:
             uid = self._search_user_id(session, self._username) or ''
@@ -1111,6 +1119,31 @@ class MoxSignIn(_PluginBase):
                 log=self._log_step,
                 user_id=str(self._user_id or ""),
             )
+
+            # 缓存 cookie 过期时，浏览器会被踢回登录页。_probe_session 遇到 CF 403
+            # 会放行，所以这里必须自己兜住：清掉缓存重新登录，再试一次。
+            if not checkin_res.ok and checkin_res.status == "login":
+                steps.append('🔐 会话已失效，重新登录后重试')
+                self._log_step(f"浏览器判定未登录（{checkin_res.message}），清缓存重新登录")
+                try:
+                    self.save_data(self._cached_cookie_key(), {})
+                except Exception:
+                    pass
+                self._login(session)
+                session_cookies = {
+                    ck.name: ck.value for ck in session.cookies if ck.value is not None
+                }
+                checkin_res = checkin_with_browser(
+                    base_url=self._base_url,
+                    cookies=session_cookies,
+                    proxy=self._proxy_url,
+                    timeout=self._timeout,
+                    log=self._log_step,
+                    user_id=str(self._user_id or ""),
+                )
+                ocr_steps = [s for s in checkin_res.steps if "识别" in s]
+                result['captcha_result'] = ocr_steps[-1] if ocr_steps else "未使用"
+
             ocr_steps = [s for s in checkin_res.steps if "识别" in s]
             result['captcha_result'] = ocr_steps[-1] if ocr_steps else "未使用"
 
