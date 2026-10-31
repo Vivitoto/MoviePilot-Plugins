@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -55,6 +56,79 @@ class BrowserResult:
 
 def _noop_log(_msg: str) -> None:
     pass
+
+
+_UNICODE_ESC_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+# 从可能被截断的 JSON 里抠 message / code 字段：故意不要求配对的收尾引号，
+# 因为截断常常正好切在字符串中间。
+_MESSAGE_FIELD_RE = re.compile(r'"message"\s*:\s*"([^"]*)')
+_CODE_FIELD_RE = re.compile(r'"code"\s*:\s*"([^"]*)"')
+
+
+def _readable(text: str) -> str:
+    """把 \\uXXXX 转义还原成真实字符，让站点返回内容在通知里能直接读懂。
+
+    站点现在返回的是 JSON 转义形式（`\\u9a8c\\u8bc1\\u7801`），
+    但也可能哪天改回直接输出中文。两种形式都要能处理：
+
+    - 已经是中文 → 原样返回
+    - 是 \\uXXXX 转义 → 还原成中文
+    - 被截断导致转义不完整（如结尾只剩 `\\u6`）→ 保留原样，不报错
+
+    注意不能直接用 `bytes.decode('unicode_escape')`：那个只适用于纯 ASCII，
+    碰上已经含中文的文本会把中文也一起弄坏。
+    """
+    if not text:
+        return ""
+    try:
+        return _UNICODE_ESC_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    except Exception:
+        return text
+
+
+def _error_text(body: str) -> tuple[str, str]:
+    """把接口返回体拆成（展示用文本, 匹配用文本）。
+
+    - 展示用：优先取 JSON 里的 message / errors；JSON 解析失败（响应被截断、
+      结尾转义不完整）时用正则再抠一次 message，避免把整段 JSON 骨架展示出去；
+      都取不到才退回还原后的原文。
+    - 匹配用：解析结果 + 业务错误码 code + 还原后的原文都放进去。站点有时会带
+      `"code": "NEED_TOPUP"` 这种机器可读的错误码，比匹配中文文案可靠得多，
+      文案改了也不受影响；中文关键词则兜住没有 code 的情况。
+
+    返回 (展示文本, 匹配文本)。
+    """
+    detail = ""
+    code = ""
+    truncated = False
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict):
+            detail = f"{parsed.get('message') or ''} {parsed.get('errors') or ''}".strip()
+            code = str(parsed.get("code") or "")
+    except Exception:
+        detail = ""
+    if not detail:
+        found = _MESSAGE_FIELD_RE.search(body)
+        if found:
+            detail = found.group(1)
+            # 抠出来的字段后面没有收尾引号，说明响应在这里被截断了
+            truncated = not body[found.end(1):].startswith('"')
+    if not code:
+        found_code = _CODE_FIELD_RE.search(body)
+        if found_code:
+            code = found_code.group(1)
+    if not detail:
+        detail = body
+
+    shown = _readable(detail).strip()
+    if truncated:
+        # 去掉末尾残留的半个转义（如 `\u6`），再用省略号表明这里没取全
+        shown = re.sub(r"\\u[0-9a-fA-F]{0,3}$", "", shown).rstrip()
+        shown = f"{shown}…" if shown else shown
+
+    haystack = f"{detail} {code} {_readable(body)}"
+    return shown, haystack
 
 
 def _launch_browser(proxy: str = "", log: Callable[[str], None] = _noop_log):
@@ -361,6 +435,7 @@ def login_with_browser(
         result.add("本地 OCR 可用")
 
         last_code = -1
+        body = ""
         last_detail = ""
         solved = False
 
@@ -441,10 +516,13 @@ def login_with_browser(
 
         if not solved:
             result.status = "login"
-            if last_detail and "验证码" in last_detail:
+            # 关键词判断与展示都走 _error_text：转义/未转义两种返回形式都能处理，
+            # 展示用的 last_detail 已经还原成可读中文，不会再吐出 \uXXXX。
+            show_text, match_text = _error_text(body)
+            if "验证码" in match_text:
                 result.message = f"登录验证码连续 {CAPTCHA_MAX_TRIES} 次未通过"
             else:
-                result.message = f"登录失败 HTTP {last_code}：{last_detail[:120]}"
+                result.message = f"登录失败 HTTP {last_code}：{(show_text or '站点未返回说明')[:120]}"
             return result
 
         # 登录接口返回成功不等于真的登录了，用签到页确认一次
@@ -622,6 +700,8 @@ def checkin_with_browser(
 
         last_code = -1
         last_body = ""
+        last_detail = ""      # 展示用：解析后可读的文本
+        last_match = ""       # 匹配用：转义与未转义两种形式都覆盖
         solved = False
 
         for attempt in range(1, CAPTCHA_MAX_TRIES + 1):
@@ -689,21 +769,21 @@ def checkin_with_browser(
             if last_code == 200:
                 solved = True
                 break
-            if "已签到" in last_body or "已经签到" in last_body:
+
+            # 站点返回的中文可能是 \uXXXX 转义，也可能哪天变回直接输出中文，
+            # 两种都得能判断。_error_text 同时给出「可读文本」和「两种形式都覆盖的匹配文本」，
+            # 下面的关键词判断一律走 last_match，不要拿 last_body 原文去比中文。
+            last_detail, last_match = _error_text(last_body)
+
+            if "已签到" in last_match or "已经签到" in last_match:
                 result.ok = True
                 result.status = "already"
                 result.message = "服务端表示今日已签到"
                 result.cookies = _collect_cookies(context)
                 return result
-            # 响应里的中文是 \uXXXX 转义的，必须先反序列化再判断，
-            # 直接对原文做中文匹配永远匹配不到。
-            try:
-                parsed = json.loads(last_body)
-                detail = f"{parsed.get('message') or ''} {parsed.get('errors') or ''}"
-            except Exception:
-                detail = last_body
+
             # 只有「验证码错误」才值得换一张重试，其他错误重试也没意义
-            if "验证码" not in detail:
+            if "验证码" not in last_match:
                 break
             time.sleep(1.5)
 
@@ -716,10 +796,18 @@ def checkin_with_browser(
             return result
 
         result.status = "submit"
-        if last_body and "验证码" in last_body:
+        # 关键词判断走 last_match（解析结果 + 还原后的原文，转义/未转义都能命中），
+        # 展示走 last_detail（已经还原成可读中文）。两者分工不同，不要混用。
+        if "验证码" in last_match:
             result.message = f"验证码连续 {CAPTCHA_MAX_TRIES} 次识别错误"
+        elif "NEED_TOPUP" in last_match or "充值记录" in last_match:
+            # 优先认站点的业务错误码 NEED_TOPUP，文案改了也不受影响；
+            # 中文关键词兜住站点不带 code 的情况。
+            result.message = ("站点要求先有充值记录才能签到，"
+                              "充值任意商品（软妹币/魔币/VIP 等）即可恢复（非插件问题）")
         else:
-            result.message = f"签到失败 HTTP {last_code}：{last_body[:150]}"
+            text = last_detail or "站点未返回说明"
+            result.message = f"签到失败 HTTP {last_code}：{text[:150]}"
         return result
 
     except Exception as exc:
